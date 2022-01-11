@@ -78,6 +78,12 @@ RESOURCES = {
         'key_properties': ['id'],
         'replication_method': 'INCREMENTAL',
     },
+    'refs': {
+        'url': '',
+        'schema': load_schema('refs'),
+        'key_properties': ['ref'],
+        'replication_method': 'INCREMENTAL',
+    },
     'issues': {
         'url': '/projects/{id}/issues?scope=all&updated_after={start_date}',
         'schema': load_schema('issues'),
@@ -317,6 +323,9 @@ def gen_request(url):
 def format_timestamp(data, typ, schema):
     result = data
     if data and typ == 'string' and schema.get('format') == 'date-time':
+        match = re.match(r'(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) ([-+]\d{2})(\d{2})', data)
+        if match:
+            data = '{}T{}{}:{}'.format(match.group(1), match.group(2), match.group(3), match.group(4))
         rfc3339_ts = rfc3339_to_timestamp(data)
         utc_dt = datetime.datetime.utcfromtimestamp(rfc3339_ts).replace(tzinfo=pytz.UTC)
         result = utils.strftime(utc_dt)
@@ -436,6 +445,9 @@ def get_commit_detail_local(commit, repo_path, gitLocal):
 
 def get_commit_changes(commit, repo_path, useLocal, gitLocal):
     get_commit_detail_local(commit, repo_path, gitLocal)
+    commit['_sdc_repository'] = repo_path
+    commit['id'] = '{}/{}'.format(repo_path, commit['sha'])
+    return commit
 
 async def getChangedfilesForCommits(commits, repo_path, hasLocal, gitLocal):
     coros = []
@@ -518,7 +530,7 @@ def sync_commit_files(project, head_shas, gitLocal):
         missingParents = {}
 
         # Verify that this commit exists in our mirrored repo
-        hasLocal = gitLocal.hasLocalCommit(repo_path, headSha)
+        hasLocal = gitLocal.hasLocalCommit(repo_path, headSha, 'gitlab')
         if not hasLocal:
             LOGGER.warning('MISSING REF/COMMIT {}/{}/{}'.format(repo_path, headRef, headSha))
             # Skip this now that we're mirroring everything. We shouldn't have anything that's
@@ -581,6 +593,7 @@ def sync_commit_files(project, head_shas, gitLocal):
         changedFileList = asyncio.run(getChangedfilesForCommits(curQ, repo_path, hasLocal,
             gitLocal))
         for commitfiles in changedFileList:
+            LOGGER.info(commitfiles)
             with Transformer(pre_hook=format_timestamp) as transformer:
                 rec = transformer.transform(commitfiles, RESOURCES[entity]["schema"], mdata)
             singer.write_record('commit_files', rec, time_extracted=extraction_time)
