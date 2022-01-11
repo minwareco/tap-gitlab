@@ -217,11 +217,13 @@ def get_url(entity, id, secondary_id=None, start_date=None):
     if secondary_id and not isinstance(secondary_id, int):
         secondary_id = secondary_id.replace("/", "%2F")
 
-    return CONFIG['api_url'] + RESOURCES[entity]['url'].format(
+    url = CONFIG['api_url'] + RESOURCES[entity]['url'].format(
             id=id,
             secondary_id=secondary_id,
             start_date=start_date
         )
+    LOGGER.info('Beginning sync of entity {}, URL stream {}'.format(entity, url))
+    return url
 
 
 def get_start(entity):
@@ -649,7 +651,7 @@ def sync_group(gid, pids):
 
     if not pids:
         #  Get all the projects of the group if none are provided
-        group_projects_url = get_url(entity="group_projects", id=gid)        
+        group_projects_url = get_url(entity="group_projects", id=gid)
         for project in gen_request(group_projects_url):
             if project["id"]:
                 sync_project(project["id"])
@@ -898,6 +900,10 @@ def main_impl():
     if args.state:
         STATE.update(args.state)
 
+    # TODO: when fetching files, there is a dependency on fetching all the PRs first. Then, we will
+    # need to explicitly fetch each PR head because they are not provided with git clone --mirror
+    # like they are with github.
+
     # If discover flag was passed, log an info message and exit
     global CATALOG
     if args.discover:
@@ -913,6 +919,7 @@ def main_impl():
 
 
 def main():
+
     try:
         main_impl()
     except Exception as exc:
