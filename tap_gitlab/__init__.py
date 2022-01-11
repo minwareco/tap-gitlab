@@ -14,6 +14,11 @@ import pytz
 import backoff
 from strict_rfc3339 import rfc3339_to_timestamp
 from dateutil.parser import isoparse
+import psutil
+import gc
+import asyncio
+
+from .gitlocal import GitLocal
 
 PER_PAGE_MAX = 100
 CONFIG = {
@@ -66,6 +71,12 @@ RESOURCES = {
         'key_properties': ['id'],
         'replication_method': 'INCREMENTAL',
         'replication_keys': ['created_at'],
+    },
+    'commit_files': {
+        'url': '',
+        'schema': load_schema('commit_files'),
+        'key_properties': ['id'],
+        'replication_method': 'INCREMENTAL',
     },
     'issues': {
         'url': '/projects/{id}/issues?scope=all&updated_after={start_date}',
@@ -322,7 +333,7 @@ def sync_branches(project):
     entity = "branches"
     stream = CATALOG.get_stream(entity)
     if stream is None or not stream.is_selected():
-        return
+        return []
     mdata = metadata.to_map(stream.metadata)
 
     # Return all of the branch commit shas
@@ -412,6 +423,188 @@ def sync_commits(project, head_shas=[]):
 
     singer.write_state(STATE)
 
+
+def get_commit_detail_local(commit, repo_path, gitLocal):
+    try:
+        changes = gitLocal.getCommitDiff(repo_path, commit['sha'], 'gitlab')
+        commit['files'] = changes
+    except Exception as e:
+        # This generally shouldn't happen since we've already fetched and checked out the head
+        # commit successfully, so it probably indicates some sort of system error. Just let it
+        # bubbl eup for now.
+        raise e
+
+def get_commit_changes(commit, repo_path, useLocal, gitLocal):
+    get_commit_detail_local(commit, repo_path, gitLocal)
+
+async def getChangedfilesForCommits(commits, repo_path, hasLocal, gitLocal):
+    coros = []
+    for commit in commits:
+        changesCoro = asyncio.to_thread(get_commit_changes, commit, repo_path, hasLocal, gitLocal)
+        coros.append(changesCoro)
+    results = await asyncio.gather(*coros)
+    return results
+
+def sync_commit_files(project, head_shas, gitLocal):
+    entity = 'commit_files'
+    stream = CATALOG.get_stream(entity)
+    if stream is None or not stream.is_selected():
+        return
+    mdata = metadata.to_map(stream.metadata)
+    
+    refentity = 'refs'
+    refstream = CATALOG.get_stream(refentity)
+    if refstream is None or not refstream.is_selected():
+        return
+    refmdata = metadata.to_map(refstream.metadata)
+
+    #bookmark = get_bookmark(state, repo_path, "commit_files", "since", start_date)
+    #if not bookmark:
+    #bookmark = '1970-01-01'
+
+    # Get the set of all commits we have fetched previously
+    #fetchedCommits = get_bookmark(state, repo_path, "commit_files", "fetchedCommits")
+    #if not fetchedCommits:
+    #    fetchedCommits = {}
+    #else:
+        # We have run previously, so we don't want to use the time-based bookmark becuase it could
+        # skip commits that are pushed after they are committed. So, reset the 'since' bookmark back
+        # to the beginning of time and rely solely on the fetchedCommits bookmark.
+    #    bookmark = '1970-01-01'
+
+    # We don't want newly fetched commits to update the state if we fail partway through, because
+    # this could lead to commits getting marked as fetched when their parents are never fetched. So,
+    # copy the dict.
+    fetchedCommits = {} #fetchedCommits.copy()
+
+    # Get all of the branch heads to use for querying commits
+    #heads = get_all_heads_for_commits(repo_path)
+    repo_path = project['path_with_namespace']
+    heads = gitLocal.getAllHeads(repo_path, 'gitlab')
+
+    # Set this here for updating the state when we don't run any queries
+    extraction_time = singer.utils.now()
+
+    count = 0
+    # The lage majority of PRs are less than this many commits
+    LOG_PAGE_SIZE = 20
+
+    # First, walk through all the heads and queue up all the commits that need to be imported
+    commitQ = []
+
+    for headRef in heads:
+        count += 1
+        if count % 10 == 0:
+            process = psutil.Process(os.getpid())
+            LOGGER.info('Processed heads {}/{}, {} bytes'.format(count, len(heads),
+                process.memory_info().rss))
+        headSha = heads[headRef]
+        # If the head commit has already been synced, then skip.
+        if headSha in fetchedCommits:
+            #LOGGER.info('Head already fetched {} {}'.format(headRef, headSha))
+            continue
+
+        # Emit the ref record as well
+        refRecord = {
+            '_sdc_repository': repo_path,
+            'ref': headRef,
+            'sha': headSha
+        }
+        with Transformer(pre_hook=format_timestamp) as transformer:
+            rec = transformer.transform(refRecord, RESOURCES[refentity]["schema"], refmdata)
+        singer.write_record('refs', rec, time_extracted=extraction_time)
+
+        # Maintain a list of parents we are waiting to see
+        missingParents = {}
+
+        # Verify that this commit exists in our mirrored repo
+        hasLocal = gitLocal.hasLocalCommit(repo_path, headSha)
+        if not hasLocal:
+            LOGGER.warning('MISSING REF/COMMIT {}/{}/{}'.format(repo_path, headRef, headSha))
+            # Skip this now that we're mirroring everything. We shouldn't have anything that's
+            # missing from github's API
+            continue
+
+        offset = 0
+        while True:
+            # Get commits one page at a time
+            if hasLocal:
+                commits = gitLocal.getCommitsFromHead(repo_path, headSha, 'gitlab', limit = LOG_PAGE_SIZE,
+                    offset = offset)
+            extraction_time = singer.utils.now()
+            for commit in commits:
+                # Skip commits we've already imported
+                if commit['sha'] in fetchedCommits:
+                    continue
+
+                commitQ.append(commit)
+
+                # Record that we have now fetched this commit
+                fetchedCommits[commit['sha']] = 1
+                # No longer a missing parent
+                missingParents.pop(commit['sha'], None)
+
+                # Keep track of new missing parents
+                for parent in commit['parents']:
+                    if not parent['sha'] in fetchedCommits:
+                        missingParents[parent['sha']] = 1
+
+            # If there are no missing parents, then we are done prior to reaching the lst page
+            if not missingParents:
+                break
+            elif hasLocal and len(commits) > 0:
+                offset += LOG_PAGE_SIZE
+            # Else if we have reached the end of our data but not found the parents, then we
+            # have a problem
+            else:
+                raise Exception('Some commit parents never found: ' + \
+                    ','.join(missingParents.keys()))
+
+    # Now run through all the commits in parallel
+    gc.collect()
+    process = psutil.Process(os.getpid())
+    LOGGER.info('Processing {} commits, mem(mb) {}'.format(len(commitQ),
+        process.memory_info().rss / (1024 * 1024)))
+
+    # Run in batches
+    i = 0
+    BATCH_SIZE = 16
+    PRINT_INTERVAL = 16
+    hasLocal = True # Only local now
+    totalCommits = len(commitQ)
+    finishedCount = 0
+
+    while len(commitQ) > 0:
+        # Slice off the queue to avoid memory leaks
+        curQ = commitQ[0:BATCH_SIZE]
+        commitQ = commitQ[BATCH_SIZE:]
+        changedFileList = asyncio.run(getChangedfilesForCommits(curQ, repo_path, hasLocal,
+            gitLocal))
+        for commitfiles in changedFileList:
+            with Transformer(pre_hook=format_timestamp) as transformer:
+                rec = transformer.transform(commitfiles, RESOURCES[entity]["schema"], mdata)
+            singer.write_record('commit_files', rec, time_extracted=extraction_time)
+
+        finishedCount += BATCH_SIZE
+        if i % (BATCH_SIZE * PRINT_INTERVAL) == 0:
+            curQ = None
+            changedFileList = None
+            gc.collect()
+            process = psutil.Process(os.getpid())
+            LOGGER.info('Imported {}/{} commits, {}/{} MB'.format(finishedCount, totalCommits,
+                process.memory_info().rss / (1024 * 1024),
+                process.memory_info().data / (1024 * 1024)))
+
+
+    # Don't write until the end so that we don't record fetchedCommits if we fail and never get
+    # their parents.
+    #singer.write_bookmark(state, repo_path, 'commit_files', {
+    #    'since': singer.utils.strftime(extraction_time),
+    #    'fetchedCommits': fetchedCommits
+    #})
+
+    #return state
+
 def sync_issues(project):
     entity = "issues"
     stream = CATALOG.get_stream(entity)
@@ -462,7 +655,7 @@ def sync_merge_requests(project):
     entity = "merge_requests"
     stream = CATALOG.get_stream(entity)
     if stream is None or not stream.is_selected():
-        return
+        return []
     mdata = metadata.to_map(stream.metadata)
 
     # Keep a state for the merge requests fetched per project
@@ -706,7 +899,7 @@ def sync_epics(group):
 
     singer.write_state(STATE)
 
-def sync_group(gid, pids):
+def sync_group(gid, pids, gitLocal):
     stream = CATALOG.get_stream("groups")
     mdata = metadata.to_map(stream.metadata)
     url = get_url(entity="groups", id=gid)
@@ -725,12 +918,12 @@ def sync_group(gid, pids):
         group_projects_url = get_url(entity="group_projects", id=gid)
         for project in gen_request(group_projects_url):
             if project["id"]:
-                sync_project(project["id"])
+                sync_project(project["id"], gitLocal)
     else:
         # Sync only specific projects of the group, if explicit projects are provided
         for pid in pids:
             if pid.startswith(data['full_path'] + '/') or pid in [str(p['id']) for p in data['projects']]:
-                sync_project(pid)
+                sync_project(pid, gitLocal)
 
     sync_milestones(data, "group")
 
@@ -831,7 +1024,7 @@ def sync_jobs(project, pipeline):
             transformed_row = transformer.transform(row, RESOURCES[entity]['schema'], mdata)
             singer.write_record(entity, transformed_row, time_extracted=utils.now())
 
-def sync_project(pid):
+def sync_project(pid, gitLocal):
     url = get_url(entity="projects", id=pid)
 
     try:
@@ -856,7 +1049,7 @@ def sync_project(pid):
             .format(data['id']))
 
 
-    if data['last_activity_at'] >= get_start(state_key):
+    if True: #data['last_activity_at'] >= get_start(state_key):
 
         sync_members(data)
         sync_users(data)
@@ -873,6 +1066,8 @@ def sync_project(pid):
         sync_tags(data)
         sync_pipelines(data)
         sync_vulnerabilities(data)
+
+        sync_commit_files(data, [], gitLocal)
 
         if not stream.is_selected():
             return
@@ -937,15 +1132,21 @@ def do_sync():
     for stream in CATALOG.get_selected_streams(STATE):
         singer.write_schema(stream.tap_stream_id, stream.schema.to_dict(), stream.key_properties)
 
+
+    gitLocal = GitLocal({
+        'access_token': CONFIG['private_token'],
+        'workingDir': '/tmp'
+    })
+
     sync_site_users()
 
     for gid in gids:
-        sync_group(gid, pids)
+        sync_group(gid, pids, gitLocal)
 
     if not gids:
         # When not syncing groups
         for pid in pids:
-            sync_project(pid)
+            sync_project(pid, gitLocal)
 
     # Write the final STATE
     # This fixes syncing using groups, which don't emit a STATE message
