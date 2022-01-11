@@ -159,10 +159,17 @@ class GitLocal:
 
     self.INIT_REPO[repo] = True
 
-  def hasLocalCommit(self, repo, sha, source):
+  def hasLocalCommit(self, repo, sha, source, noRetry=False):
     repoDir = self._getRepoWorkingDir(repo, source)
     completed = subprocess.run(['git', 'log', '-n1', sha], cwd=repoDir, capture_output=True)
     if completed.stderr.decode('utf-8', errors='replace').find('fatal: bad object') != -1:
+      if not noRetry:
+        completed = subprocess.run(['git', 'fetch', 'origin', sha], cwd=repoDir, capture_output=True)
+        if completed.stderr.decode('utf-8', errors='replace').find('fatal: ') != -1:
+          strippedOutput = completed.stderr.replace(self.token.encode('utf8'), b'<TOKEN>')
+          raise GitLocalException('Head fetch failed with code {} for repo {}, sha {}, message: {}'\
+            .format(completed.returncode, repo, sha, strippedOutput))
+        return self.hasLocalCommit(repo, sha, source, True)
       return False
     elif completed.returncode != 0:
       # Don't send the acces token through the error logging system
