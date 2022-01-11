@@ -55,7 +55,13 @@ RESOURCES = {
         'replication_method': 'FULL_TABLE',
     },
     'commits': {
-        'url': '/projects/{id}/repository/commits?since={start_date}&with_stats=true',
+        # Not sure what all=true does, but we do want all the commits
+        # It's fine for ref_name to be blank, which will fetch the main branch. It can also be set
+        # to a commit hash rather than a named ref and works properly.
+        # WARNING: don't add all=true here because that seems to reverse the commit order, which can
+        # lead to skipping commits.
+        'url': '/projects/{id}/repository/commits?since={start_date}&with_stats=true'
+            '&ref_name={ref_name}',
         'schema': load_schema('commits'),
         'key_properties': ['id'],
         'replication_method': 'INCREMENTAL',
@@ -210,7 +216,7 @@ class ResourceInaccessible(Exception):
 def truthy(val) -> bool:
     return str(val).lower() in TRUTHY
 
-def get_url(entity, id, secondary_id=None, start_date=None):
+def get_url(entity, id, secondary_id=None, start_date=None, ref_name=None):
     if not isinstance(id, int):
         id = id.replace("/", "%2F")
 
@@ -220,7 +226,8 @@ def get_url(entity, id, secondary_id=None, start_date=None):
     url = CONFIG['api_url'] + RESOURCES[entity]['url'].format(
             id=id,
             secondary_id=secondary_id,
-            start_date=start_date
+            start_date=start_date,
+            ref_name=ref_name
         )
     LOGGER.info('Beginning sync of entity {}, URL stream {}'.format(entity, url))
     return url
@@ -318,33 +325,90 @@ def sync_branches(project):
         return
     mdata = metadata.to_map(stream.metadata)
 
+    # Return all of the branch commit shas
+    default_branch_commit = None
+    non_default_branch_commits = []
+
     url = get_url(entity="branches", id=project['id'])
     with Transformer(pre_hook=format_timestamp) as transformer:
         for row in gen_request(url):
+            if row['default']:
+                default_branch_commit = row['commit']['id']
+            else:
+                non_default_branch_commits.append(row['commit_id'])
             row['project_id'] = project['id']
             flatten_id(row, "commit")
             transformed_row = transformer.transform(row, RESOURCES["branches"]["schema"], mdata)
             singer.write_record("branches", transformed_row, time_extracted=utils.now())
 
-def sync_commits(project):
+    # Return the default branch head commit first
+    all_branch_commits = [default_branch_commit]
+    all_branch_commits.extend(non_default_branch_commits)
+    return all_branch_commits
+
+def sync_commits(project, head_shas=[]):
     entity = "commits"
     stream = CATALOG.get_stream(entity)
     if stream is None or not stream.is_selected():
         return
     mdata = metadata.to_map(stream.metadata)
 
-    # Keep a state for the commits fetched per project
     state_key = "project_{}_commits".format(project["id"])
     start_date=get_start(state_key)
+    if not start_date:
+        start_date = '1970-01-01'
 
-    url = get_url(entity=entity, id=project['id'], start_date=start_date)
-    with Transformer(pre_hook=format_timestamp) as transformer:
-        for row in gen_request(url):
-            row['project_id'] = project["id"]
-            transformed_row = transformer.transform(row, RESOURCES[entity]["schema"], mdata)
+    # Keep a state for the commits fetched per project
+    state_key_fetchedCommits = state_key + '_fetchedCommits'
+    fetchedCommits = STATE[state_key_fetchedCommits] if state_key_fetchedCommits in STATE else None
+    if not fetchedCommits:
+        fetchedCommits = {}
+    else:
+        # We have run previously, so we don't want to use the time-based bookmark becuase it could
+        # skip commits that are pushed after they are committed. So, reset the 'since' bookmark back
+        # to the beginning of time and rely solely on the fetchedCommits bookmark.
+        start_date = '1970-01-01'
 
-            singer.write_record(entity, transformed_row, time_extracted=utils.now())
-            utils.update_state(STATE, state_key, row['created_at'])
+    for head in head_shas:
+        # If the head commit has already been synced, then skip.
+        if head in fetchedCommits:
+            continue
+
+        # Maintain a list of parents we are waiting to see
+        missingParents = {}
+
+        url = get_url(entity=entity, id=project['id'], start_date=start_date, ref_name=head)
+        with Transformer(pre_hook=format_timestamp) as transformer:
+            for row in gen_request(url):
+                # Skip commits we've already imported
+                if row['id'] in fetchedCommits:
+                    continue
+
+                # Record that we have now fetched this commit
+                fetchedCommits[row['id']] = 1
+                # No longer a missing parent
+                missingParents.pop(row['id'], None)
+
+                # Keep track of new missing parents
+                for parent_sha in row['parent_ids']:
+                    if not parent_sha in fetchedCommits:
+                        missingParents[parent_sha] = 1
+
+                row['project_id'] = project["id"]
+                transformed_row = transformer.transform(row, RESOURCES[entity]["schema"], mdata)
+
+                singer.write_record(entity, transformed_row, time_extracted=utils.now())
+                utils.update_state(STATE, state_key, row['created_at'])
+
+                # If there are no missing parents, then we are done prior to reaching the last page
+                if not missingParents:
+                    break
+
+            if missingParents:
+                raise Exception('Some commit parents never found: ' +
+                    ','.join(missingParents.keys()))
+
+    STATE[state_key_fetchedCommits] = fetchedCommits
 
     singer.write_state(STATE)
 
@@ -405,9 +469,12 @@ def sync_merge_requests(project):
     state_key = "project_{}_merge_requests".format(project["id"])
     start_date=get_start(state_key)
 
+    pr_shas = []
+
     url = get_url(entity=entity, id=project['id'], start_date=start_date)
     with Transformer(pre_hook=format_timestamp) as transformer:
         for row in gen_request(url):
+            pr_shas.append(row['sha'])
             flatten_id(row, "author")
             flatten_id(row, "assignee")
             flatten_id(row, "milestone")
@@ -449,9 +516,13 @@ def sync_merge_requests(project):
             # (if it has changed, new commits may be there to fetch)
             sync_merge_request_commits(project, transformed_row)
 
-    singer.write_state(STATE)
+    # Do not write state until subsequent commits have been imported!
+    #singer.write_state(STATE)
+
+    return pr_shas
 
 def sync_merge_request_commits(project, merge_request):
+    # This stream will be disabled in favor of directly importing the commits
     entity = "merge_request_commits"
     stream = CATALOG.get_stream(entity)
     if stream is None or not stream.is_selected():
@@ -790,9 +861,12 @@ def sync_project(pid):
         sync_members(data)
         sync_users(data)
         sync_issues(data)
-        sync_merge_requests(data)
-        sync_commits(data)
-        sync_branches(data)
+        # This will return shas for all of the branches, with the main branch sha frst
+        head_shas = sync_branches(data)
+        # This will return a list of head SHAs associated with PRs
+        pr_shas = sync_merge_requests(data)
+        head_shas.extend(pr_shas)
+        sync_commits(data, head_shas)
         sync_milestones(data)
         sync_labels(data)
         sync_releases(data)
