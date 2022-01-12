@@ -1,3 +1,6 @@
+# TODO: consolidate this with github's copy:
+# https://minware.atlassian.net/browse/MW-258
+
 import subprocess
 import sys
 import os

@@ -360,9 +360,8 @@ def sync_branches(project, headsOnly=False):
             transformed_row = transformer.transform(row, RESOURCES["branches"]["schema"], mdata)
             singer.write_record("branches", transformed_row, time_extracted=utils.now())
 
-    # No sync here -- always return all branches
+    # No state here -- always return all branches
 
-    # Return the default branch head commit first
     return heads
 
 def sync_commits(project, heads):
@@ -392,18 +391,13 @@ def sync_commits(project, heads):
         # Don't allow any intermediate changes to alter the state
         fetchedCommits = fetchedCommits.copy()
 
-    LOGGER.info('fetchedCommits')
-    LOGGER.info(fetchedCommits)
-    LOGGER.info('heads')
-    LOGGER.info(heads)
-
     for headRef in heads:
         head = heads[headRef]
         # If the head commit has already been synced, then skip.
         if head in fetchedCommits:
-            LOGGER.info('skipping head {}'.format(head))
+            LOGGER.info('skipping head commit {}'.format(head))
             continue
-        LOGGER.info('loading head {}'.format(head))
+        LOGGER.info('loading head commit {}'.format(head))
 
         # Maintain a list of parents we are waiting to see
         missingParents = {}
@@ -413,12 +407,7 @@ def sync_commits(project, heads):
             for row in gen_request(url):
                 # Skip commits we've already imported
                 if row['id'] in fetchedCommits:
-                    LOGGER.info('skipping row')
-                    LOGGER.info(row)
                     continue
-                else:
-                    LOGGER.info('writing row')
-                    LOGGER.info(row)
 
                 # Record that we have now fetched this commit
                 fetchedCommits[row['id']] = 1
@@ -456,7 +445,7 @@ def get_commit_detail_local(commit, repo_path, gitLocal):
     except Exception as e:
         # This generally shouldn't happen since we've already fetched and checked out the head
         # commit successfully, so it probably indicates some sort of system error. Just let it
-        # bubbl eup for now.
+        # bubble up for now.
         raise e
 
 def get_commit_changes(commit, repo_path, useLocal, gitLocal):
@@ -486,7 +475,6 @@ def sync_commit_files(project, heads, gitLocal):
         return
     refmdata = metadata.to_map(refstream.metadata)
 
-
     # Keep a state for the commits fetched per project
     state_key = "project_{}_commits_files".format(project["id"])
     fetchedCommits = STATE[state_key] if state_key in STATE else None
@@ -505,7 +493,7 @@ def sync_commit_files(project, heads, gitLocal):
     extraction_time = singer.utils.now()
 
     count = 0
-    # The lage majority of PRs are less than this many commits
+    # The large majority of PRs are less than this many commits
     LOG_PAGE_SIZE = 20
 
     # First, walk through all the heads and queue up all the commits that need to be imported
@@ -520,7 +508,6 @@ def sync_commit_files(project, heads, gitLocal):
         headSha = heads[headRef]
         # If the head commit has already been synced, then skip.
         if headSha in fetchedCommits:
-            #LOGGER.info('Head already fetched {} {}'.format(headRef, headSha))
             continue
 
         # Emit the ref record as well
@@ -539,10 +526,11 @@ def sync_commit_files(project, heads, gitLocal):
         # Verify that this commit exists in our mirrored repo
         hasLocal = gitLocal.hasLocalCommit(repo_path, headSha, 'gitlab')
         if not hasLocal:
-            LOGGER.warning('MISSING REF/COMMIT {}/{}/{}'.format(repo_path, headRef, headSha))
-            # Skip this now that we're mirroring everything. We shouldn't have anything that's
-            # missing from github's API
-            continue
+            # For now, make this a fatal error. If it happens legitimately, we can turn this back
+            # into a warning (like it is for github) in the future.
+            raise Exception('MISSING REF/COMMIT {}/{}/{}'.format(repo_path, headRef, headSha))
+            #LOGGER.warning('MISSING REF/COMMIT {}/{}/{}'.format(repo_path, headRef, headSha))
+            #continue
 
         offset = 0
         while True:
@@ -619,7 +607,8 @@ def sync_commit_files(project, heads, gitLocal):
     # their parents.
     STATE[state_key] = fetchedCommits
 
-    # Just rely on the sync state call at the end so we don't emit duplicate states at the end.
+    # Just rely on the sync state call at the end so we don't emit duplicate states at the end,
+    # which can be large.
     #singer.write_state(STATE)
 
 def sync_issues(project):
@@ -672,7 +661,7 @@ def sync_merge_requests(project, headsOnly=False):
     entity = "merge_requests"
     stream = CATALOG.get_stream(entity)
     if not headsOnly and (stream is None or not stream.is_selected()):
-        return []
+        return {}
     if not headsOnly:
         mdata = metadata.to_map(stream.metadata)
 
@@ -730,7 +719,8 @@ def sync_merge_requests(project, headsOnly=False):
             # (if it has changed, new commits may be there to fetch)
             sync_merge_request_commits(project, transformed_row)
 
-    # Do not write state until subsequent commits have been imported!
+    # Do not write state until subsequent commits have been imported, since those depend on the
+    # list of PR head SHAs.
     #singer.write_state(STATE)
 
     return heads
@@ -1078,13 +1068,11 @@ def sync_project(pid, gitLocal):
 
     if commitFiles:
         heads = sync_branches(data, True)
-        LOGGER.info('BRANCH HEADS')
-        LOGGER.info(heads)
         # This function will utilize the state so that PR heads won't be returned if they haven't
-        # been updated since the last run
+        # been updated since the last run.
+        # NOTE: the reason we have to do this is because git clone --mirror doesn't mirror refs for
+        # all the PR heads with gitlab like it does for github.
         pr_heads = sync_merge_requests(data, True)
-        LOGGER.info('PR HEADS')
-        LOGGER.info(pr_heads)
         heads.update(pr_heads)
         # This is the only function that will update the state
         sync_commit_files(data, heads, gitLocal)
@@ -1210,10 +1198,6 @@ def main_impl():
     if args.state:
         STATE.update(args.state)
 
-    # TODO: when fetching files, there is a dependency on fetching all the PRs first. Then, we will
-    # need to explicitly fetch each PR head because they are not provided with git clone --mirror
-    # like they are with github.
-
     # If discover flag was passed, log an info message and exit
     global CATALOG
     if args.discover:
@@ -1229,7 +1213,6 @@ def main_impl():
 
 
 def main():
-
     try:
         main_impl()
     except Exception as exc:
