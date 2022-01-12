@@ -1074,7 +1074,6 @@ def sync_project(pid, gitLocal):
         # all the PR heads with gitlab like it does for github.
         pr_heads = sync_merge_requests(data, True)
         heads.update(pr_heads)
-        # This is the only function that will update the state
         sync_commit_files(data, heads, gitLocal)
     elif data['last_activity_at'] >= get_start(state_key):
         sync_members(data)
