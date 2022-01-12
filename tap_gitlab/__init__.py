@@ -341,7 +341,6 @@ def flatten_id(item, target):
 def sync_branches(project, headsOnly=False):
     entity = "branches"
     stream = CATALOG.get_stream(entity)
-    LOGGER.info(headsOnly)
     if not headsOnly and (stream is None or not stream.is_selected()):
         return {}
     if not headsOnly:
@@ -360,6 +359,8 @@ def sync_branches(project, headsOnly=False):
             flatten_id(row, "commit")
             transformed_row = transformer.transform(row, RESOURCES["branches"]["schema"], mdata)
             singer.write_record("branches", transformed_row, time_extracted=utils.now())
+
+    # No sync here -- always return all branches
 
     # Return the default branch head commit first
     return heads
@@ -386,6 +387,9 @@ def sync_commits(project, heads):
         # skip commits that are pushed after they are committed. So, reset the 'since' bookmark back
         # to the beginning of time and rely solely on the fetchedCommits bookmark.
         start_date = '1970-01-01'
+
+        # Don't allow any intermediate changes to alter the state
+        fetchedCommits = fetchedCommits.copy()
 
     for headRef in heads:
         head = heads[headRef]
@@ -427,7 +431,7 @@ def sync_commits(project, heads):
                 raise Exception('Some commit parents never found: ' +
                     ','.join(missingParents.keys()))
 
-    utils.update_state(STATE, state_key_fetchedCommits, fetchedCommits)
+    STATE[state_key_fetchedCommits] = fetchedCommits
 
     singer.write_state(STATE)
 
@@ -469,26 +473,15 @@ def sync_commit_files(project, heads, gitLocal):
         return
     refmdata = metadata.to_map(refstream.metadata)
 
+
+    # Keep a state for the commits fetched per project
     state_key = "project_{}_commits_files".format(project["id"])
-
-    #bookmark = get_bookmark(state, repo_path, "commit_files", "since", start_date)
-    #if not bookmark:
-    #bookmark = '1970-01-01'
-
-    # Get the set of all commits we have fetched previously
-    #fetchedCommits = get_bookmark(state, repo_path, "commit_files", "fetchedCommits")
-    #if not fetchedCommits:
-    #    fetchedCommits = {}
-    #else:
-        # We have run previously, so we don't want to use the time-based bookmark becuase it could
-        # skip commits that are pushed after they are committed. So, reset the 'since' bookmark back
-        # to the beginning of time and rely solely on the fetchedCommits bookmark.
-    #    bookmark = '1970-01-01'
-
-    # We don't want newly fetched commits to update the state if we fail partway through, because
-    # this could lead to commits getting marked as fetched when their parents are never fetched. So,
-    # copy the dict.
-    fetchedCommits = {} #fetchedCommits.copy()
+    fetchedCommits = STATE[state_key] if state_key in STATE else None
+    if not fetchedCommits:
+        fetchedCommits = {}
+    else:
+        # Don't allow any intermediate changes to alter the state
+        fetchedCommits = fetchedCommits.copy()
 
     # Get all of the branch heads to use for querying commits
     #heads = get_all_heads_for_commits(repo_path)
@@ -611,9 +604,10 @@ def sync_commit_files(project, heads, gitLocal):
 
     # Don't write until the end so that we don't record fetchedCommits if we fail and never get
     # their parents.
-    utils.update_state(STATE, state_key, state_key)
+    STATE[state_key] = fetchedCommits
 
-    singer.write_state(STATE)
+    # Just rely on the sync state call at the end so we don't emit duplicate states at the end.
+    #singer.write_state(STATE)
 
 def sync_issues(project):
     entity = "issues"
@@ -1062,18 +1056,32 @@ def sync_project(pid, gitLocal):
             "There is no last_activity_at or created_at field on project {}. This usually means I don't have access to the project."
             .format(data['id']))
 
-    headsOnly = True
+    # If commit_files is selected, then skip the other streams
+    commitFilesStream = CATALOG.get_stream('commit_files')
+    if commitFilesStream is None or not commitFilesStream.is_selected():
+        commitFiles = False
+    else:
+        commitFiles = True
 
-    if headsOnly or data['last_activity_at'] >= get_start(state_key):
-
+    if commitFiles:
+        heads = sync_branches(data, True)
+        LOGGER.info('BRANCH HEADS')
+        LOGGER.info(heads)
+        # This function will utilize the state so that PR heads won't be returned if they haven't
+        # been updated since the last run
+        pr_heads = sync_merge_requests(data, True)
+        LOGGER.info('PR HEADS')
+        LOGGER.info(pr_heads)
+        heads.update(pr_heads)
+        # This is the only function that will update the state
+        sync_commit_files(data, heads, gitLocal)
+    elif data['last_activity_at'] >= get_start(state_key):
         sync_members(data)
         sync_users(data)
         sync_issues(data)
-        # This will return shas for all of the branches, with the main branch sha frst
-        heads = sync_branches(data, headsOnly)
-        LOGGER.info(heads)
-        # This will return a list of head SHAs associated with PRs
-        pr_heads = sync_merge_requests(data, headsOnly)
+        # These will both return a dict of REFNAME => SHA
+        heads = sync_branches(data, False)
+        pr_heads = sync_merge_requests(data, False)
         heads.update(pr_heads)
         sync_commits(data, heads)
         sync_milestones(data)
@@ -1082,8 +1090,6 @@ def sync_project(pid, gitLocal):
         sync_tags(data)
         sync_pipelines(data)
         sync_vulnerabilities(data)
-
-        sync_commit_files(data, heads, gitLocal)
 
         if not stream.is_selected():
             return
