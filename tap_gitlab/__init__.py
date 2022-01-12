@@ -375,7 +375,8 @@ def sync_commits(project, heads):
     state_key = "project_{}_commits".format(project["id"])
     start_date=get_start(state_key)
     if not start_date:
-        start_date = '1970-01-01'
+        # Don't use 1970, it leads to empty results for some reason.
+        start_date = '1980-01-01'
 
     # Keep a state for the commits fetched per project
     state_key_fetchedCommits = state_key + '_fetchedCommits'
@@ -386,16 +387,23 @@ def sync_commits(project, heads):
         # We have run previously, so we don't want to use the time-based bookmark becuase it could
         # skip commits that are pushed after they are committed. So, reset the 'since' bookmark back
         # to the beginning of time and rely solely on the fetchedCommits bookmark.
-        start_date = '1970-01-01'
+        start_date = '1980-01-01'
 
         # Don't allow any intermediate changes to alter the state
         fetchedCommits = fetchedCommits.copy()
+
+    LOGGER.info('fetchedCommits')
+    LOGGER.info(fetchedCommits)
+    LOGGER.info('heads')
+    LOGGER.info(heads)
 
     for headRef in heads:
         head = heads[headRef]
         # If the head commit has already been synced, then skip.
         if head in fetchedCommits:
+            LOGGER.info('skipping head {}'.format(head))
             continue
+        LOGGER.info('loading head {}'.format(head))
 
         # Maintain a list of parents we are waiting to see
         missingParents = {}
@@ -405,7 +413,12 @@ def sync_commits(project, heads):
             for row in gen_request(url):
                 # Skip commits we've already imported
                 if row['id'] in fetchedCommits:
+                    LOGGER.info('skipping row')
+                    LOGGER.info(row)
                     continue
+                else:
+                    LOGGER.info('writing row')
+                    LOGGER.info(row)
 
                 # Record that we have now fetched this commit
                 fetchedCommits[row['id']] = 1
