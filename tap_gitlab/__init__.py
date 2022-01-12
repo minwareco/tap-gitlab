@@ -14,6 +14,11 @@ import pytz
 import backoff
 from strict_rfc3339 import rfc3339_to_timestamp
 from dateutil.parser import isoparse
+import psutil
+import gc
+import asyncio
+
+from .gitlocal import GitLocal
 
 PER_PAGE_MAX = 100
 CONFIG = {
@@ -55,11 +60,29 @@ RESOURCES = {
         'replication_method': 'FULL_TABLE',
     },
     'commits': {
-        'url': '/projects/{id}/repository/commits?since={start_date}&with_stats=true',
+        # Not sure what all=true does, but we do want all the commits
+        # It's fine for ref_name to be blank, which will fetch the main branch. It can also be set
+        # to a commit hash rather than a named ref and works properly.
+        # WARNING: don't add all=true here because that seems to reverse the commit order, which can
+        # lead to skipping commits.
+        'url': '/projects/{id}/repository/commits?since={start_date}&with_stats=true'
+            '&ref_name={ref_name}',
         'schema': load_schema('commits'),
         'key_properties': ['id'],
         'replication_method': 'INCREMENTAL',
         'replication_keys': ['created_at'],
+    },
+    'commit_files': {
+        'url': '',
+        'schema': load_schema('commit_files'),
+        'key_properties': ['id'],
+        'replication_method': 'INCREMENTAL',
+    },
+    'refs': {
+        'url': '',
+        'schema': load_schema('refs'),
+        'key_properties': ['ref'],
+        'replication_method': 'INCREMENTAL',
     },
     'issues': {
         'url': '/projects/{id}/issues?scope=all&updated_after={start_date}',
@@ -210,18 +233,21 @@ class ResourceInaccessible(Exception):
 def truthy(val) -> bool:
     return str(val).lower() in TRUTHY
 
-def get_url(entity, id, secondary_id=None, start_date=None):
+def get_url(entity, id, secondary_id=None, start_date=None, ref_name=None):
     if not isinstance(id, int):
         id = id.replace("/", "%2F")
 
     if secondary_id and not isinstance(secondary_id, int):
         secondary_id = secondary_id.replace("/", "%2F")
 
-    return CONFIG['api_url'] + RESOURCES[entity]['url'].format(
+    url = CONFIG['api_url'] + RESOURCES[entity]['url'].format(
             id=id,
             secondary_id=secondary_id,
-            start_date=start_date
+            start_date=start_date,
+            ref_name=ref_name
         )
+    LOGGER.info('Beginning sync of entity {}, URL stream {}'.format(entity, url))
+    return url
 
 
 def get_start(entity):
@@ -297,6 +323,9 @@ def gen_request(url):
 def format_timestamp(data, typ, schema):
     result = data
     if data and typ == 'string' and schema.get('format') == 'date-time':
+        match = re.match(r'(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) ([-+]\d{2})(\d{2})', data)
+        if match:
+            data = '{}T{}{}:{}'.format(match.group(1), match.group(2), match.group(3), match.group(4))
         rfc3339_ts = rfc3339_to_timestamp(data)
         utc_dt = datetime.datetime.utcfromtimestamp(rfc3339_ts).replace(tzinfo=pytz.UTC)
         result = utils.strftime(utc_dt)
@@ -309,42 +338,278 @@ def flatten_id(item, target):
     else:
         item[target + '_id'] = None
 
-def sync_branches(project):
+def sync_branches(project, headsOnly=False):
     entity = "branches"
     stream = CATALOG.get_stream(entity)
-    if stream is None or not stream.is_selected():
-        return
-    mdata = metadata.to_map(stream.metadata)
+    if not headsOnly and (stream is None or not stream.is_selected()):
+        return {}
+    if not headsOnly:
+        mdata = metadata.to_map(stream.metadata)
+
+    # Return all of the branch commit shas
+    heads = {}
 
     url = get_url(entity="branches", id=project['id'])
     with Transformer(pre_hook=format_timestamp) as transformer:
         for row in gen_request(url):
+            heads['refs/heads/' + row['name']] = row['commit']['id']
+            if headsOnly:
+                continue
             row['project_id'] = project['id']
             flatten_id(row, "commit")
             transformed_row = transformer.transform(row, RESOURCES["branches"]["schema"], mdata)
             singer.write_record("branches", transformed_row, time_extracted=utils.now())
 
-def sync_commits(project):
+    # No state here -- always return all branches
+
+    return heads
+
+def sync_commits(project, heads):
     entity = "commits"
     stream = CATALOG.get_stream(entity)
     if stream is None or not stream.is_selected():
         return
     mdata = metadata.to_map(stream.metadata)
 
-    # Keep a state for the commits fetched per project
     state_key = "project_{}_commits".format(project["id"])
     start_date=get_start(state_key)
+    if not start_date:
+        # Don't use 1970, it leads to empty results for some reason.
+        start_date = '1980-01-01'
 
-    url = get_url(entity=entity, id=project['id'], start_date=start_date)
-    with Transformer(pre_hook=format_timestamp) as transformer:
-        for row in gen_request(url):
-            row['project_id'] = project["id"]
-            transformed_row = transformer.transform(row, RESOURCES[entity]["schema"], mdata)
+    # Keep a state for the commits fetched per project
+    state_key_fetchedCommits = state_key + '_fetchedCommits'
+    fetchedCommits = STATE[state_key_fetchedCommits] if state_key_fetchedCommits in STATE else None
+    if not fetchedCommits:
+        fetchedCommits = {}
+    else:
+        # We have run previously, so we don't want to use the time-based bookmark becuase it could
+        # skip commits that are pushed after they are committed. So, reset the 'since' bookmark back
+        # to the beginning of time and rely solely on the fetchedCommits bookmark.
+        start_date = '1980-01-01'
 
-            singer.write_record(entity, transformed_row, time_extracted=utils.now())
-            utils.update_state(STATE, state_key, row['created_at'])
+        # Don't allow any intermediate changes to alter the state
+        fetchedCommits = fetchedCommits.copy()
+
+    for headRef in heads:
+        head = heads[headRef]
+        # If the head commit has already been synced, then skip.
+        if head in fetchedCommits:
+            LOGGER.info('skipping head commit {}'.format(head))
+            continue
+        LOGGER.info('loading head commit {}'.format(head))
+
+        # Maintain a list of parents we are waiting to see
+        missingParents = {}
+
+        url = get_url(entity=entity, id=project['id'], start_date=start_date, ref_name=head)
+        with Transformer(pre_hook=format_timestamp) as transformer:
+            for row in gen_request(url):
+                # Skip commits we've already imported
+                if row['id'] in fetchedCommits:
+                    continue
+
+                # Record that we have now fetched this commit
+                fetchedCommits[row['id']] = 1
+                # No longer a missing parent
+                missingParents.pop(row['id'], None)
+
+                # Keep track of new missing parents
+                for parent_sha in row['parent_ids']:
+                    if not parent_sha in fetchedCommits:
+                        missingParents[parent_sha] = 1
+
+                row['project_id'] = project["id"]
+                transformed_row = transformer.transform(row, RESOURCES[entity]["schema"], mdata)
+
+                singer.write_record(entity, transformed_row, time_extracted=utils.now())
+                utils.update_state(STATE, state_key, row['created_at'])
+
+                # If there are no missing parents, then we are done prior to reaching the last page
+                if not missingParents:
+                    break
+
+            if missingParents:
+                raise Exception('Some commit parents never found: ' +
+                    ','.join(missingParents.keys()))
+
+    STATE[state_key_fetchedCommits] = fetchedCommits
 
     singer.write_state(STATE)
+
+
+def get_commit_detail_local(commit, repo_path, gitLocal):
+    try:
+        changes = gitLocal.getCommitDiff(repo_path, commit['sha'], 'gitlab')
+        commit['files'] = changes
+    except Exception as e:
+        # This generally shouldn't happen since we've already fetched and checked out the head
+        # commit successfully, so it probably indicates some sort of system error. Just let it
+        # bubble up for now.
+        raise e
+
+def get_commit_changes(commit, repo_path, useLocal, gitLocal):
+    get_commit_detail_local(commit, repo_path, gitLocal)
+    commit['_sdc_repository'] = repo_path
+    commit['id'] = '{}/{}'.format(repo_path, commit['sha'])
+    return commit
+
+async def getChangedfilesForCommits(commits, repo_path, hasLocal, gitLocal):
+    coros = []
+    for commit in commits:
+        changesCoro = asyncio.to_thread(get_commit_changes, commit, repo_path, hasLocal, gitLocal)
+        coros.append(changesCoro)
+    results = await asyncio.gather(*coros)
+    return results
+
+def sync_commit_files(project, heads, gitLocal):
+    entity = 'commit_files'
+    stream = CATALOG.get_stream(entity)
+    if stream is None or not stream.is_selected():
+        return
+    mdata = metadata.to_map(stream.metadata)
+
+    refentity = 'refs'
+    refstream = CATALOG.get_stream(refentity)
+    if refstream is None or not refstream.is_selected():
+        return
+    refmdata = metadata.to_map(refstream.metadata)
+
+    # Keep a state for the commits fetched per project
+    state_key = "project_{}_commits_files".format(project["id"])
+    fetchedCommits = STATE[state_key] if state_key in STATE else None
+    if not fetchedCommits:
+        fetchedCommits = {}
+    else:
+        # Don't allow any intermediate changes to alter the state
+        fetchedCommits = fetchedCommits.copy()
+
+    # Get all of the branch heads to use for querying commits
+    #heads = get_all_heads_for_commits(repo_path)
+    repo_path = project['path_with_namespace']
+    #heads = gitLocal.getAllHeads(repo_path, 'gitlab')
+
+    # Set this here for updating the state when we don't run any queries
+    extraction_time = singer.utils.now()
+
+    count = 0
+    # The large majority of PRs are less than this many commits
+    LOG_PAGE_SIZE = 20
+
+    # First, walk through all the heads and queue up all the commits that need to be imported
+    commitQ = []
+
+    for headRef in heads:
+        count += 1
+        if count % 10 == 0:
+            process = psutil.Process(os.getpid())
+            LOGGER.info('Processed heads {}/{}, {} bytes'.format(count, len(heads),
+                process.memory_info().rss))
+        headSha = heads[headRef]
+        # If the head commit has already been synced, then skip.
+        if headSha in fetchedCommits:
+            continue
+
+        # Emit the ref record as well
+        refRecord = {
+            '_sdc_repository': repo_path,
+            'ref': headRef,
+            'sha': headSha
+        }
+        with Transformer(pre_hook=format_timestamp) as transformer:
+            rec = transformer.transform(refRecord, RESOURCES[refentity]["schema"], refmdata)
+        singer.write_record('refs', rec, time_extracted=extraction_time)
+
+        # Maintain a list of parents we are waiting to see
+        missingParents = {}
+
+        # Verify that this commit exists in our mirrored repo
+        hasLocal = gitLocal.hasLocalCommit(repo_path, headSha, 'gitlab')
+        if not hasLocal:
+            # For now, make this a fatal error. If it happens legitimately, we can turn this back
+            # into a warning (like it is for github) in the future.
+            raise Exception('MISSING REF/COMMIT {}/{}/{}'.format(repo_path, headRef, headSha))
+            #LOGGER.warning('MISSING REF/COMMIT {}/{}/{}'.format(repo_path, headRef, headSha))
+            #continue
+
+        offset = 0
+        while True:
+            # Get commits one page at a time
+            if hasLocal:
+                commits = gitLocal.getCommitsFromHead(repo_path, headSha, 'gitlab', limit = LOG_PAGE_SIZE,
+                    offset = offset)
+            extraction_time = singer.utils.now()
+            for commit in commits:
+                # Skip commits we've already imported
+                if commit['sha'] in fetchedCommits:
+                    continue
+
+                commitQ.append(commit)
+
+                # Record that we have now fetched this commit
+                fetchedCommits[commit['sha']] = 1
+                # No longer a missing parent
+                missingParents.pop(commit['sha'], None)
+
+                # Keep track of new missing parents
+                for parent in commit['parents']:
+                    if not parent['sha'] in fetchedCommits:
+                        missingParents[parent['sha']] = 1
+
+            # If there are no missing parents, then we are done prior to reaching the lst page
+            if not missingParents:
+                break
+            elif hasLocal and len(commits) > 0:
+                offset += LOG_PAGE_SIZE
+            # Else if we have reached the end of our data but not found the parents, then we
+            # have a problem
+            else:
+                raise Exception('Some commit parents never found: ' + \
+                    ','.join(missingParents.keys()))
+
+    # Now run through all the commits in parallel
+    gc.collect()
+    process = psutil.Process(os.getpid())
+    LOGGER.info('Processing {} commits, mem(mb) {}'.format(len(commitQ),
+        process.memory_info().rss / (1024 * 1024)))
+
+    # Run in batches
+    i = 0
+    BATCH_SIZE = 16
+    PRINT_INTERVAL = 16
+    hasLocal = True # Only local now
+    totalCommits = len(commitQ)
+    finishedCount = 0
+
+    while len(commitQ) > 0:
+        # Slice off the queue to avoid memory leaks
+        curQ = commitQ[0:BATCH_SIZE]
+        commitQ = commitQ[BATCH_SIZE:]
+        changedFileList = asyncio.run(getChangedfilesForCommits(curQ, repo_path, hasLocal,
+            gitLocal))
+        for commitfiles in changedFileList:
+            with Transformer(pre_hook=format_timestamp) as transformer:
+                rec = transformer.transform(commitfiles, RESOURCES[entity]["schema"], mdata)
+            singer.write_record('commit_files', rec, time_extracted=extraction_time)
+
+        finishedCount += BATCH_SIZE
+        if i % (BATCH_SIZE * PRINT_INTERVAL) == 0:
+            curQ = None
+            changedFileList = None
+            gc.collect()
+            process = psutil.Process(os.getpid())
+            LOGGER.info('Imported {}/{} commits, {}/{} MB'.format(finishedCount, totalCommits,
+                process.memory_info().rss / (1024 * 1024),
+                process.memory_info().data / (1024 * 1024)))
+
+
+    # Don't write until the end so that we don't record fetchedCommits if we fail and never get
+    # their parents.
+    STATE[state_key] = fetchedCommits
+
+    # Just rely on the sync state call at the end so we don't emit duplicate states at the end,
+    # which can be large.
+    #singer.write_state(STATE)
 
 def sync_issues(project):
     entity = "issues"
@@ -392,20 +657,27 @@ def sync_issues(project):
 
     singer.write_state(STATE)
 
-def sync_merge_requests(project):
+def sync_merge_requests(project, headsOnly=False):
     entity = "merge_requests"
     stream = CATALOG.get_stream(entity)
-    if stream is None or not stream.is_selected():
-        return
-    mdata = metadata.to_map(stream.metadata)
+    if not headsOnly and (stream is None or not stream.is_selected()):
+        return {}
+    if not headsOnly:
+        mdata = metadata.to_map(stream.metadata)
 
     # Keep a state for the merge requests fetched per project
     state_key = "project_{}_merge_requests".format(project["id"])
     start_date=get_start(state_key)
 
+    heads = {}
+
     url = get_url(entity=entity, id=project['id'], start_date=start_date)
     with Transformer(pre_hook=format_timestamp) as transformer:
         for row in gen_request(url):
+            heads['refs/pull/{}/head'.format(row['iid'])] = row['sha']
+            if headsOnly:
+                utils.update_state(STATE, state_key, row['updated_at'])
+                continue
             flatten_id(row, "author")
             flatten_id(row, "assignee")
             flatten_id(row, "milestone")
@@ -447,9 +719,14 @@ def sync_merge_requests(project):
             # (if it has changed, new commits may be there to fetch)
             sync_merge_request_commits(project, transformed_row)
 
-    singer.write_state(STATE)
+    # Do not write state until subsequent commits have been imported, since those depend on the
+    # list of PR head SHAs.
+    #singer.write_state(STATE)
+
+    return heads
 
 def sync_merge_request_commits(project, merge_request):
+    # This stream will be disabled in favor of directly importing the commits
     entity = "merge_request_commits"
     stream = CATALOG.get_stream(entity)
     if stream is None or not stream.is_selected():
@@ -633,7 +910,7 @@ def sync_epics(group):
 
     singer.write_state(STATE)
 
-def sync_group(gid, pids):
+def sync_group(gid, pids, gitLocal):
     stream = CATALOG.get_stream("groups")
     mdata = metadata.to_map(stream.metadata)
     url = get_url(entity="groups", id=gid)
@@ -649,15 +926,15 @@ def sync_group(gid, pids):
 
     if not pids:
         #  Get all the projects of the group if none are provided
-        group_projects_url = get_url(entity="group_projects", id=gid)        
+        group_projects_url = get_url(entity="group_projects", id=gid)
         for project in gen_request(group_projects_url):
             if project["id"]:
-                sync_project(project["id"])
+                sync_project(project["id"], gitLocal)
     else:
         # Sync only specific projects of the group, if explicit projects are provided
         for pid in pids:
             if pid.startswith(data['full_path'] + '/') or pid in [str(p['id']) for p in data['projects']]:
-                sync_project(pid)
+                sync_project(pid, gitLocal)
 
     sync_milestones(data, "group")
 
@@ -758,7 +1035,7 @@ def sync_jobs(project, pipeline):
             transformed_row = transformer.transform(row, RESOURCES[entity]['schema'], mdata)
             singer.write_record(entity, transformed_row, time_extracted=utils.now())
 
-def sync_project(pid):
+def sync_project(pid, gitLocal):
     url = get_url(entity="projects", id=pid)
 
     try:
@@ -782,15 +1059,31 @@ def sync_project(pid):
             "There is no last_activity_at or created_at field on project {}. This usually means I don't have access to the project."
             .format(data['id']))
 
+    # If commit_files is selected, then skip the other streams
+    commitFilesStream = CATALOG.get_stream('commit_files')
+    if commitFilesStream is None or not commitFilesStream.is_selected():
+        commitFiles = False
+    else:
+        commitFiles = True
 
-    if data['last_activity_at'] >= get_start(state_key):
-
+    if commitFiles:
+        heads = sync_branches(data, True)
+        # This function will utilize the state so that PR heads won't be returned if they haven't
+        # been updated since the last run.
+        # NOTE: the reason we have to do this is because git clone --mirror doesn't mirror refs for
+        # all the PR heads with gitlab like it does for github.
+        pr_heads = sync_merge_requests(data, True)
+        heads.update(pr_heads)
+        sync_commit_files(data, heads, gitLocal)
+    elif data['last_activity_at'] >= get_start(state_key):
         sync_members(data)
         sync_users(data)
         sync_issues(data)
-        sync_merge_requests(data)
-        sync_commits(data)
-        sync_branches(data)
+        # These will both return a dict of REFNAME => SHA
+        heads = sync_branches(data, False)
+        pr_heads = sync_merge_requests(data, False)
+        heads.update(pr_heads)
+        sync_commits(data, heads)
         sync_milestones(data)
         sync_labels(data)
         sync_releases(data)
@@ -861,15 +1154,21 @@ def do_sync():
     for stream in CATALOG.get_selected_streams(STATE):
         singer.write_schema(stream.tap_stream_id, stream.schema.to_dict(), stream.key_properties)
 
+
+    gitLocal = GitLocal({
+        'access_token': CONFIG['private_token'],
+        'workingDir': '/tmp'
+    })
+
     sync_site_users()
 
     for gid in gids:
-        sync_group(gid, pids)
+        sync_group(gid, pids, gitLocal)
 
     if not gids:
         # When not syncing groups
         for pid in pids:
-            sync_project(pid)
+            sync_project(pid, gitLocal)
 
     # Write the final STATE
     # This fixes syncing using groups, which don't emit a STATE message
