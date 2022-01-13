@@ -28,6 +28,7 @@ CONFIG = {
     'groups': '',
     'ultimate_license': False,
     'fetch_merge_request_commits': False,
+    'fetch_merge_request_notes': False,
     'fetch_pipelines_extended': False
 }
 STATE = {}
@@ -108,6 +109,12 @@ RESOURCES = {
         'url': '/projects/{id}/merge_requests/{secondary_id}/commits',
         'schema': load_schema('merge_request_commits'),
         'key_properties': ['project_id', 'merge_request_iid', 'commit_id'],
+        'replication_method': 'FULL_TABLE',
+    },
+    'merge_request_notes': {
+        'url': '/projects/{id}/merge_requests/{secondary_id}/notes',
+        'schema': load_schema('merge_request_notes'),
+        'key_properties': ['id'],
         'replication_method': 'FULL_TABLE',
     },
     'project_milestones': {
@@ -217,7 +224,7 @@ RESOURCES = {
 }
 
 ULTIMATE_RESOURCES = ("epics", "epic_issues")
-STREAM_CONFIG_SWITCHES = ('merge_request_commits', 'pipelines_extended')
+STREAM_CONFIG_SWITCHES = ('merge_request_commits', 'merge_request_notes', 'pipelines_extended')
 
 LOGGER = singer.get_logger()
 SESSION = requests.Session()
@@ -719,6 +726,10 @@ def sync_merge_requests(project, headsOnly=False):
             # (if it has changed, new commits may be there to fetch)
             sync_merge_request_commits(project, transformed_row)
 
+            # And then sync all the commits for this MR
+            # (if it has changed, new commits may be there to fetch)
+            sync_merge_request_notes(project, transformed_row)
+
     # Do not write state until subsequent commits have been imported, since those depend on the
     # list of PR head SHAs.
     #singer.write_state(STATE)
@@ -733,7 +744,7 @@ def sync_merge_request_commits(project, merge_request):
         return
     mdata = metadata.to_map(stream.metadata)
 
-    url = get_url(entity="merge_request_commits", id=project['id'], secondary_id=merge_request['iid'])
+    url = get_url(entity=entity, id=project['id'], secondary_id=merge_request['iid'])
 
     with Transformer(pre_hook=format_timestamp) as transformer:
         for row in gen_request(url):
@@ -741,9 +752,25 @@ def sync_merge_request_commits(project, merge_request):
             row['merge_request_iid'] = merge_request['iid']
             row['commit_id'] = row['id']
             row['commit_short_id'] = row['short_id']
-            transformed_row = transformer.transform(row, RESOURCES["merge_request_commits"]["schema"], mdata)
+            transformed_row = transformer.transform(row, RESOURCES[entity]["schema"], mdata)
 
-            singer.write_record("merge_request_commits", transformed_row, time_extracted=utils.now())
+            singer.write_record(entity, transformed_row, time_extracted=utils.now())
+
+def sync_merge_request_notes(project, merge_request):
+    entity = "merge_request_notes"
+    stream = CATALOG.get_stream(entity)
+    if stream is None or not stream.is_selected():
+        return
+    mdata = metadata.to_map(stream.metadata)
+
+    url = get_url(entity=entity, id=project['id'], secondary_id=merge_request['iid'])
+
+    with Transformer(pre_hook=format_timestamp) as transformer:
+        for row in gen_request(url):
+            row['project_id'] = project['id']
+            transformed_row = transformer.transform(row, RESOURCES[entity]["schema"], mdata)
+
+            singer.write_record(entity, transformed_row, time_extracted=utils.now())
 
 def sync_releases(project):
     entity = "releases"
@@ -1189,6 +1216,7 @@ def main_impl():
     CONFIG.update(args.config)
     CONFIG['ultimate_license'] = truthy(CONFIG['ultimate_license'])
     CONFIG['fetch_merge_request_commits'] = truthy(CONFIG['fetch_merge_request_commits'])
+    CONFIG['fetch_merge_request_notes'] = truthy(CONFIG['fetch_merge_request_notes'])
     CONFIG['fetch_pipelines_extended'] = truthy(CONFIG['fetch_pipelines_extended'])
 
     if '/api/' not in CONFIG['api_url']:

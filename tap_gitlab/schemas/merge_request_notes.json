@@ -1,0 +1,126 @@
+{
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": ["null", "integer"]
+        },
+        "project_id": {
+            "type": ["null", "integer"]
+        },
+        "type": {
+            "type": ["null", "string"]
+        },
+        "body": {
+            "type": ["null", "string"]
+        },
+        "attachment": {
+            "type": ["null", "string"]
+        },
+        "author": {
+            "type": ["null", "object"],
+            "properties": {
+                "id": {
+                    "type": ["null", "integer"]
+                },
+                "username": {
+                    "type": ["null", "string"]
+                },
+                "name": {
+                    "type": ["null", "string"]
+                },
+                "state": {
+                    "type": ["null", "string"]
+                }
+            }
+        },
+        "created_at": {
+            "anyOf": [
+                {
+                    "type": "string",
+                    "format": "date-time"
+                },
+                {
+                    "type": "null"
+                }
+            ]
+        },
+        "updated_at": {
+            "anyOf": [
+                {
+                    "type": "string",
+                    "format": "date-time"
+                },
+                {
+                    "type": "null"
+                }
+            ]
+        },
+        "system": {
+            "type": ["null", "boolean"]
+        },
+        "noteable_id": {
+            "type": ["null", "integer"]
+        },
+        "noteable_iid": {
+            "type": ["null", "integer"]
+        },
+        "noteable_type": {
+            "type": ["null", "string"]
+        },
+        "position": {
+            "type": ["null", "object"],
+            "properties": {
+                "id": {
+                    "type": ["null", "integer"]
+                },
+                "base_sha": {
+                    "type": ["null", "string"]
+                },
+                "start_sha": {
+                    "type": ["null", "string"]
+                },
+                "head_sha": {
+                    "type": ["null", "string"]
+                },
+                "old_path": {
+                    "type": ["null", "string"]
+                },
+                "new_path": {
+                    "type": ["null", "string"]
+                },
+                "position_type": {
+                    "type": ["null", "string"]
+                },
+                "old_line": {
+                    "type": ["null", "number"]
+                },
+                "new_line": {
+                    "type": ["null", "number"]
+                }
+            }
+        },
+        "resolvable": {
+          "type": ["null", "boolean"]
+        },
+        "resolved": {
+            "type": ["null", "boolean"]
+        },
+        "resolved_at": {
+            "anyOf": [
+                {
+                    "type": "string",
+                    "format": "date-time"
+                },
+                {
+                    "type": "null"
+                }
+            ]
+        },
+        "resolved_by": {
+            "type": ["null", "string"]
+        },
+        "confidential": {
+            "type": ["null", "string"]
+        }
+    }
+}
