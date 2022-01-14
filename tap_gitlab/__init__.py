@@ -685,11 +685,12 @@ def sync_merge_requests(project, headsOnly=False):
             if headsOnly:
                 utils.update_state(STATE, state_key, row['updated_at'])
                 continue
-            flatten_id(row, "author")
-            flatten_id(row, "assignee")
+            # Include the full info rather than just the ID
+            #flatten_id(row, "author")
+            #flatten_id(row, "assignee")
             flatten_id(row, "milestone")
-            flatten_id(row, "merged_by")
-            flatten_id(row, "closed_by")
+            #flatten_id(row, "merged_by")
+            #flatten_id(row, "closed_by")
 
             # Get the assignee ids
             assignee_ids = []
