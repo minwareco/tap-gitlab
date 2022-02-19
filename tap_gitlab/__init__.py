@@ -1185,7 +1185,8 @@ def do_sync():
 
     gitLocal = GitLocal({
         'access_token': CONFIG['private_token'],
-        'workingDir': '/tmp'
+        'workingDir': '/tmp',
+        'pullDomain': CONFIG['pull_domain'] if 'pull_domain' in CONFIG else None,
     })
 
     sync_site_users()

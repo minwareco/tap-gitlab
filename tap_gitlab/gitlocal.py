@@ -109,6 +109,7 @@ class GitLocal:
   def __init__(self, config):
     self.token = config['access_token']
     self.workingDir = config['workingDir']
+    self.pullDomain = config['pullDomain']
     self.LS_CACHE = {}
     self.INIT_REPO = {}
 
@@ -140,9 +141,13 @@ class GitLocal:
           .format(repo, completed.returncode, strippedOutput))
     else:
       if source == 'github':
-        cloneUrl = "https://{}@github.com/{}.git".format(self.token, repo)
+        if not self.pullDomain:
+          self.pullDomain = 'github.com'
+        cloneUrl = "https://{}@{}/{}.git".format(self.token, self.pullDomain, repo)
       elif source == 'gitlab':
-        cloneUrl = "https://oauth2:{}@gitlab.com/{}.git".format(self.token, repo)
+        if not self.pullDomain:
+          self.pullDomain = 'gitlab.com'
+        cloneUrl = "https://oauth2:{}@{}/{}.git".format(self.token, self.pullDomain, repo)
       else:
         raise Exception('Unrecognized source {}'.format(source))
       orgDir = self._getOrgWorkingDir(repo)
