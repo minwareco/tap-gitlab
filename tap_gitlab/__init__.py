@@ -1183,11 +1183,12 @@ def do_sync():
         singer.write_schema(stream.tap_stream_id, stream.schema.to_dict(), stream.key_properties)
 
 
+    domain = CONFIG['pull_domain'] if 'pull_domain' in CONFIG else 'gitlab.com'
     gitLocal = GitLocal({
         'access_token': CONFIG['private_token'],
         'workingDir': '/tmp',
-        'pullDomain': CONFIG['pull_domain'] if 'pull_domain' in CONFIG else None,
-    })
+    }, 'https://oauth2:{}@' + domain + '/{}.git',
+        CONFIG['hmac_token'] if 'hmac_token' in CONFIG else None)
 
     sync_site_users()
 

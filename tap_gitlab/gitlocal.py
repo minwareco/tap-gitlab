@@ -1,4 +1,4 @@
-# TODO: consolidate this with github's copy:
+# TODO: consolidate this with other copies:
 # https://minware.atlassian.net/browse/MW-258
 
 import subprocess
@@ -6,11 +6,49 @@ import sys
 import os
 import re
 import json
+import singer
+import hashlib
 
 class GitLocalException(Exception):
   pass
 
-def parseDiffLines(lines):
+logger = singer.get_logger()
+
+# Average 2^(8 * 8 / 2) = 2^32 items required to experience random collision. Collisions don't
+# matter that much in this context, so this should be more than ample length. It is almost better to
+# not have too many bits in this scenario, because it makes it harder to reliably reverse the
+# actual original code due to there being a lot more possibilities
+saveHashLen = 8
+# Save on CPU time since we are processing a lot of lines, and the lower bit length described above
+# reduces the need for making the hmac difficult to reverse.
+hmacIterations = 1
+
+def computeHmac(str, hmacToken):
+  if len(str) == 0:
+    return str
+  else:
+    hashObject = hashlib.pbkdf2_hmac('sha256', str.encode('utf8'), hmacToken.encode('utf8'),
+      hmacIterations, saveHashLen)
+    return hashObject.hex()
+
+def hashPatchLine(patchLine, hmacToken = None):
+  if patchLine[0] == '@':
+    lineSplit = patchLine.split('@@')
+    header = '@@'.join(lineSplit[:2])
+    context = '@@'.join(lineSplit[2:])
+    if len(context) == 0:
+      return patchLine
+    else:
+      return '@@'.join([header, ' ' + computeHmac(context[1:], hmacToken)])
+  else:
+    prefix = ''
+    if patchLine[0] == '+' or patchLine[0] == '-':
+      prefix = patchLine[0]
+      patchLine = patchLine[1:]
+    return ''.join([prefix, computeHmac(patchLine, hmacToken)])
+
+
+def parseDiffLines(lines, shouldEncrypt=False, hmacToken=None):
   changes = []
   curChange = None
   state = 'start'
@@ -49,13 +87,13 @@ def parseDiffLines(lines):
       if line[0] == '@':
         # Note: this line may have context at the end, which is okay and part of the git difff
         # format.
-        curChange['patch'].append(line)
+        curChange['patch'].append(hashPatchLine(line, hmacToken) if shouldEncrypt else line)
       else:
         if line[0] == '-':
           curChange['deletions'] += 1
         elif line[0] == '+':
           curChange['additions'] += 1
-        curChange['patch'].append(line)
+        curChange['patch'].append(hashPatchLine(line, hmacToken) if shouldEncrypt else line)
     elif line[0] == 'i': # index
       # Ignore file mode changes for now
       pass
@@ -106,10 +144,15 @@ def parseDiffLines(lines):
 
 
 class GitLocal:
-  def __init__(self, config):
+  def __init__(self, config, sourceUrlPattern, hmacToken=None):
     self.token = config['access_token']
     self.workingDir = config['workingDir']
-    self.pullDomain = config['pullDomain']
+    self.sourceUrlPattern = sourceUrlPattern
+    self.hmacToken = hmacToken
+    if hmacToken:
+      self.shouldEncrypt = True
+    else:
+      self.shouldEncrypt = False
     self.LS_CACHE = {}
     self.INIT_REPO = {}
 
@@ -120,19 +163,20 @@ class GitLocal:
       os.mkdir(orgWdir)
     return orgWdir
 
-  def _getRepoWorkingDir(self, repo, source):
+  def _getRepoWorkingDir(self, repo):
     orgDir = self._getOrgWorkingDir(repo)
     repoDir = repo.split('/')[1]
     repoWdir = '{}/{}.git'.format(orgDir, repoDir)
-    self._initRepo(repo, repoWdir, source)
+    self._initRepo(repo, repoWdir)
     return repoWdir
 
-  def _cloneRepo(self, repo, repoWdir, source):
+  def _cloneRepo(self, repo, repoWdir):
     """
     Clones a repository using git clone, throwing an error if the operation does not succeed
     """
     # If directory already exists, do an update
     if os.path.exists(repoWdir):
+      logger.info("Running git remote update")
       completed = subprocess.run(['git', 'remote', 'update'], cwd=repoWdir, capture_output=True)
       if completed.returncode != 0:
         # Don't send the acces token through the error logging system
@@ -140,16 +184,8 @@ class GitLocal:
         raise GitLocalException("Remote update of repo {} failed with code {}, message: {}"\
           .format(repo, completed.returncode, strippedOutput))
     else:
-      if source == 'github':
-        if not self.pullDomain:
-          self.pullDomain = 'github.com'
-        cloneUrl = "https://{}@{}/{}.git".format(self.token, self.pullDomain, repo)
-      elif source == 'gitlab':
-        if not self.pullDomain:
-          self.pullDomain = 'gitlab.com'
-        cloneUrl = "https://oauth2:{}@{}/{}.git".format(self.token, self.pullDomain, repo)
-      else:
-        raise Exception('Unrecognized source {}'.format(source))
+      logger.info('Running git clone for repo {}'.format(repo))
+      cloneUrl = self.sourceUrlPattern.format(self.token, repo)
       orgDir = self._getOrgWorkingDir(repo)
       completed = subprocess.run(['git', 'clone', '--mirror', cloneUrl], cwd=orgDir,
         capture_output=True)
@@ -159,16 +195,16 @@ class GitLocal:
         raise GitLocalException("Clone of repo {} failed with code {}, message: {}"\
           .format(repo, completed.returncode, strippedOutput))
 
-  def _initRepo(self, repo, repoWdir, source):
+  def _initRepo(self, repo, repoWdir):
     if repo in self.INIT_REPO:
       return
 
-    self._cloneRepo(repo, repoWdir, source)
+    self._cloneRepo(repo, repoWdir)
 
     self.INIT_REPO[repo] = True
 
-  def hasLocalCommit(self, repo, sha, source, noRetry=False):
-    repoDir = self._getRepoWorkingDir(repo, source)
+  def hasLocalCommit(self, repo, sha, noRetry=False):
+    repoDir = self._getRepoWorkingDir(repo)
     completed = subprocess.run(['git', 'log', '-n1', sha], cwd=repoDir, capture_output=True)
     if completed.stderr.decode('utf-8', errors='replace').find('fatal: bad object') != -1:
       if not noRetry:
@@ -177,7 +213,7 @@ class GitLocal:
           strippedOutput = completed.stderr.replace(self.token.encode('utf8'), b'<TOKEN>')
           raise GitLocalException('Head fetch failed with code {} for repo {}, sha {}, message: {}'\
             .format(completed.returncode, repo, sha, strippedOutput))
-        return self.hasLocalCommit(repo, sha, source, True)
+        return self.hasLocalCommit(repo, sha, True)
       return False
     elif completed.returncode != 0:
       # Don't send the acces token through the error logging system
@@ -187,13 +223,13 @@ class GitLocal:
     else:
       return True
 
-  def getCommitsFromHead(self, repo, headSha, source, limit=False, offset=False):
+  def getCommitsFromHead(self, repo, headSha, limit=False, offset=False):
     """
     This function lists multiple commits, but it has a few limitations based on missing data from
     github: (1) it can't fill in the comment count, (2) it doesn't know the github user IDs and
     user names associated wtih the commit.
     """
-    repoDir = self._getRepoWorkingDir(repo, source)
+    repoDir = self._getRepoWorkingDir(repo)
     # Since git log can't escape stuff, create unique sentinals
     startTok = 'xstart5147587x'
     sepTok = 'xsep4983782x'
@@ -252,12 +288,12 @@ class GitLocal:
       })
     return commits
 
-  def getCommitDiff(self, repo, sha, source):
+  def getCommitDiff(self, repo, sha):
     """
     Gets detailed information about a commit at a particular sha. This funcion assumes that the
     head has already been fetched and this commit is available.
     """
-    repoDir = self._getRepoWorkingDir(repo, source)
+    repoDir = self._getRepoWorkingDir(repo)
     completed = subprocess.run(['git', 'diff', sha + '~1', sha], cwd=repoDir, capture_output=True)
     # Special case -- first commit, diff instead with an empty tree
     if completed.returncode != 0 and b"~1': unknown revision or path not in the working tree" \
@@ -278,23 +314,30 @@ class GitLocal:
     outstr = completed.stdout.decode('utf8', errors='replace').replace('\u0000', '\uFFFD')
     lines = outstr.split('\n')
 
-    parsed = parseDiffLines(lines)
+    parsed = parseDiffLines(lines, self.shouldEncrypt, self.hmacToken)
     for diff in parsed:
       diff['commit_sha'] = sha
 
     return parsed
 
-  def getAllHeads(self, repo, source):
-    repoDir = self._getRepoWorkingDir(repo, source)
+  def getAllHeads(self, repo):
+    repoDir = self._getRepoWorkingDir(repo)
+    logger.info("Running git show-ref")
     completed = subprocess.run(['git', 'show-ref'], cwd=repoDir, capture_output=True)
+    outstr = completed.stdout.decode('utf8', errors='replace')
+
     # Special case -- first commit, diff instead with an empty tree
     if completed.returncode != 0:
       strippedOutput = '' if not completed.stderr else \
         completed.stderr.replace(self.token.encode('utf8'), b'<TOKEN>')
+
+      # Special failure case: empty repository, just return empty map
+      if completed.returncode == 1 and outstr == '' and strippedOutput == '':
+        return {}
+
       raise GitLocalException("show-ref of repo {}, failed with code {}, message: {}".format(
         repo, completed.returncode, strippedOutput))
 
-    outstr = completed.stdout.decode('utf8', errors='replace')
     headLines = outstr.split('\n')
     headMap = {}
     for line in headLines:
