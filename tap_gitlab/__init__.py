@@ -82,7 +82,7 @@ RESOURCES = {
     'refs': {
         'url': '',
         'schema': load_schema('refs'),
-        'key_properties': ['ref'],
+        'key_properties': ['id'],
         'replication_method': 'INCREMENTAL',
     },
     'issues': {
@@ -519,6 +519,7 @@ def sync_commit_files(project, heads, gitLocal):
 
         # Emit the ref record as well
         refRecord = {
+            'id': '{}/{}'.format(repo_path, headRef),
             '_sdc_repository': repo_path,
             'ref': headRef,
             'sha': headSha
