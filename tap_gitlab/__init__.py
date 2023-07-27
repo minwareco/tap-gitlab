@@ -4,9 +4,10 @@ import datetime
 import sys
 import os
 import re
+import json
 import requests
 import singer
-from singer import Transformer, utils, metadata
+from singer import Transformer, utils, metadata, metrics
 from singer.catalog import Catalog, CatalogEntry
 from singer.schema import Schema
 
@@ -26,10 +27,7 @@ CONFIG = {
     'private_token': None,
     'start_date': None,
     'groups': '',
-    'ultimate_license': False,
-    'fetch_merge_request_commits': False,
-    'fetch_merge_request_notes': False,
-    'fetch_pipelines_extended': False
+    'ultimate_license': False
 }
 STATE = {}
 CATALOG = None
@@ -53,6 +51,11 @@ RESOURCES = {
         'key_properties': ['id'],
         'replication_method': 'INCREMENTAL',
         'replication_keys': ['last_activity_at'],
+    },
+    'repositories': {
+        'schema': load_schema('repositories'),
+        'key_properties': ['id'],
+        'replication_method': 'FULL_TABLE',
     },
     'branches': {
         'url': '/projects/{id}/repository/branches',
@@ -276,7 +279,7 @@ def request(url, params=None):
         headers['User-Agent'] = CONFIG['user_agent']
 
     resp = SESSION.request('GET', url, params=params, headers=headers)
-    LOGGER.info("GET {}".format(url))
+    LOGGER.info("GET {} {}".format(url, params))
 
     if resp.status_code in [401, 403, 404]:
         LOGGER.info("Skipping request to {}".format(url))
@@ -447,7 +450,7 @@ def sync_commits(project, heads):
 
 def get_commit_detail_local(commit, repo_path, gitLocal):
     try:
-        changes = gitLocal.getCommitDiff(repo_path, commit['sha'], 'gitlab')
+        changes = gitLocal.getCommitDiff(repo_path, commit['sha'])
         commit['files'] = changes
     except Exception as e:
         # This generally shouldn't happen since we've already fetched and checked out the head
@@ -501,7 +504,7 @@ def sync_commit_files(project, heads, gitLocal):
 
     count = 0
     # The large majority of PRs are less than this many commits
-    LOG_PAGE_SIZE = 20
+    LOG_PAGE_SIZE = 100
 
     # First, walk through all the heads and queue up all the commits that need to be imported
     commitQ = []
@@ -517,16 +520,17 @@ def sync_commit_files(project, heads, gitLocal):
         if headSha in fetchedCommits:
             continue
 
-        # Emit the ref record as well
-        refRecord = {
-            'id': '{}/{}'.format(repo_path, headRef),
-            '_sdc_repository': repo_path,
-            'ref': headRef,
-            'sha': headSha
-        }
-        with Transformer(pre_hook=format_timestamp) as transformer:
-            rec = transformer.transform(refRecord, RESOURCES[refentity]["schema"], refmdata)
-        singer.write_record('refs', rec, time_extracted=extraction_time)
+        # Emit the ref record as well if it's not for a pull request
+        if not ('refs/pull' in headRef):
+            refRecord = {
+                'id': '{}/{}'.format(repo_path, headRef),
+                '_sdc_repository': repo_path,
+                'ref': headRef,
+                'sha': headSha
+            }
+            with Transformer(pre_hook=format_timestamp) as transformer:
+                rec = transformer.transform(refRecord, RESOURCES[refentity]["schema"], refmdata)
+            singer.write_record('refs', rec, time_extracted=extraction_time)
 
         # Maintain a list of parents we are waiting to see
         missingParents = {}
@@ -534,17 +538,14 @@ def sync_commit_files(project, heads, gitLocal):
         # Verify that this commit exists in our mirrored repo
         hasLocal = gitLocal.hasLocalCommit(repo_path, headSha, 'gitlab')
         if not hasLocal:
-            # For now, make this a fatal error. If it happens legitimately, we can turn this back
-            # into a warning (like it is for github) in the future.
-            raise Exception('MISSING REF/COMMIT {}/{}/{}'.format(repo_path, headRef, headSha))
-            #LOGGER.warning('MISSING REF/COMMIT {}/{}/{}'.format(repo_path, headRef, headSha))
-            #continue
+            LOGGER.warning('MISSING REF/COMMIT {}/{}/{}'.format(repo_path, headRef, headSha))
+            continue
 
         offset = 0
         while True:
             # Get commits one page at a time
             if hasLocal:
-                commits = gitLocal.getCommitsFromHead(repo_path, headSha, 'gitlab', limit = LOG_PAGE_SIZE,
+                commits = gitLocal.getCommitsFromHead(repo_path, headSha, limit = LOG_PAGE_SIZE,
                     offset = offset)
             extraction_time = singer.utils.now()
             for commit in commits:
@@ -1064,6 +1065,31 @@ def sync_jobs(project, pipeline):
             transformed_row = transformer.transform(row, RESOURCES[entity]['schema'], mdata)
             singer.write_record(entity, transformed_row, time_extracted=utils.now())
 
+def write_repository(raw_repo):
+    # if we can't see default_branch, we don't have code access
+    if not "default_branch" in raw_repo:
+        return
+
+    stream = CATALOG.get_stream('repositories')
+    if stream is None:
+        return
+
+    extraction_time = singer.utils.now()
+    repo = {}
+    repo['id'] = 'gitlab/' + raw_repo["path_with_namespace"]
+    repo['source'] = 'gitlab'
+    repo['org_name'] = raw_repo["namespace"]["full_path"]
+    repo['repo_name'] = raw_repo["path"]
+    repo['is_source_public'] = raw_repo["visibility"] != "private"
+    # TODO: handle forks
+    repo['fork_org_name'] = None
+    repo['fork_repo_name'] = None
+    repo['description'] = raw_repo["description"]
+    repo['default_branch'] = raw_repo["default_branch"]
+    with singer.Transformer() as transformer:
+        rec = transformer.transform(repo, Schema.to_dict(stream.schema), metadata=metadata.to_map(stream.metadata))
+    singer.write_record('repositories', rec, time_extracted=extraction_time)
+
 def sync_project(pid, gitLocal):
     url = get_url(entity="projects", id=pid)
 
@@ -1074,9 +1100,9 @@ def sync_project(pid, gitLocal):
         # Just skip it and continue with the rest of the extraction
         return
 
+    write_repository(data)
+
     time_extracted = utils.now()
-    stream = CATALOG.get_stream("projects")
-    mdata = metadata.to_map(stream.metadata)
 
     state_key = "project_{}".format(data["id"])
 
@@ -1120,8 +1146,11 @@ def sync_project(pid, gitLocal):
         sync_pipelines(data)
         sync_vulnerabilities(data)
 
-        if not stream.is_selected():
+        stream = CATALOG.get_stream("projects")
+        if not stream or not stream.is_selected():
             return
+
+        mdata = metadata.to_map(stream.metadata)
 
         with Transformer(pre_hook=format_timestamp) as transformer:
             flatten_id(data, "owner")
@@ -1130,49 +1159,6 @@ def sync_project(pid, gitLocal):
 
         utils.update_state(STATE, state_key, last_activity_at)
         singer.write_state(STATE)
-
-def do_discover(select_all=False):
-    streams = []
-    api_url_regex = re.compile(r'^gitlab.com')
-
-    for resource, config in RESOURCES.items():
-        mdata = metadata.get_standard_metadata(
-            schema=config["schema"],
-            key_properties=config["key_properties"],
-            valid_replication_keys=config.get("replication_keys"),
-            replication_method=config["replication_method"],
-        )
-
-        if (
-            resource in ULTIMATE_RESOURCES and not CONFIG["ultimate_license"]
-        ) or (
-            resource == "site_users" and api_url_regex.match(CONFIG['api_url']) is not None
-        ) or (
-            resource in STREAM_CONFIG_SWITCHES and not CONFIG["fetch_{}".format(resource)]
-        ):
-            mdata = metadata.to_list(metadata.write(metadata.to_map(mdata), (), 'inclusion', 'unsupported'))
-        elif select_all:
-            # If a catalog was unsupplied, we want to select all streams by default. This diverges
-            # slightly from Singer recommended behavior but is necessary for backwards compatibility
-            mdata = metadata.to_list(metadata.write(metadata.to_map(mdata), (), 'selected', True))
-
-        streams.append(
-            CatalogEntry(
-                tap_stream_id=resource,
-                stream=resource,
-                schema=Schema.from_dict(config["schema"]),
-                key_properties=config["key_properties"],
-                metadata=mdata,
-                replication_key=config.get("replication_keys"),
-                is_view=None,
-                database=None,
-                table=None,
-                row_count=None,
-                stream_alias=None,
-                replication_method=config["replication_method"],
-            )
-        )
-    return Catalog(streams)
 
 def do_sync():
     LOGGER.info("Starting sync")
@@ -1193,6 +1179,8 @@ def do_sync():
 
     sync_site_users()
 
+    LOGGER.info(gids)
+
     for gid in gids:
         sync_group(gid, pids, gitLocal)
 
@@ -1211,17 +1199,60 @@ def do_sync():
 
     LOGGER.info("Sync complete")
 
+def get_catalog_entry(resource, config):
+    api_url_regex = re.compile(r'^gitlab.com')
+    mdata = metadata.get_standard_metadata(
+        schema=config["schema"],
+        key_properties=config["key_properties"],
+        replication_method=config["replication_method"],
+    )
+
+    if (
+        resource in ULTIMATE_RESOURCES and not CONFIG["ultimate_license"]
+    ) or (
+        resource == "site_users" and api_url_regex.match(CONFIG['api_url']) is not None
+    ) or (
+        resource in STREAM_CONFIG_SWITCHES and not CONFIG["fetch_{}".format(resource)]
+    ):
+        mdata = metadata.to_list(metadata.write(metadata.to_map(mdata), (), 'inclusion', 'unsupported'))
+
+    return CatalogEntry(
+                tap_stream_id=resource,
+                stream=resource,
+                schema=Schema.from_dict(config["schema"]),
+                key_properties=config["key_properties"],
+                metadata=mdata,
+                replication_key=config.get("replication_keys"),
+                is_view=None,
+                database=None,
+                table=None,
+                row_count=None,
+                stream_alias=None,
+                replication_method=config["replication_method"],
+            )
+
+def get_catalog(raw_catalog):
+    streams = []
+
+    for config in raw_catalog["streams"]:
+        resource = config["tap_stream_id"]
+        streams.append(get_catalog_entry(resource, config))
+
+    return Catalog(streams)
+
+def do_discover(select_all=False):
+    streams = []
+    for resource, config in RESOURCES.items():
+        streams.append(get_catalog_entry(resource, config))
+    return Catalog(streams)
 
 def main_impl():
     # TODO: Address properties that are required or not
-    args = utils.parse_args(["private_token", "projects", "start_date"])
+    args = utils.parse_args(["private_token", "projects"])
     args.config["private_token"] = args.config["private_token"].strip()
 
     CONFIG.update(args.config)
     CONFIG['ultimate_license'] = truthy(CONFIG['ultimate_license'])
-    CONFIG['fetch_merge_request_commits'] = truthy(CONFIG['fetch_merge_request_commits'])
-    CONFIG['fetch_merge_request_notes'] = truthy(CONFIG['fetch_merge_request_notes'])
-    CONFIG['fetch_pipelines_extended'] = truthy(CONFIG['fetch_pipelines_extended'])
 
     if '/api/' not in CONFIG['api_url']:
         CONFIG['api_url'] += '/api/v4'
@@ -1236,12 +1267,10 @@ def main_impl():
         CATALOG.dump()
     # Otherwise run in sync mode
     else:
-        if args.catalog:
-            CATALOG = args.catalog
-        else:
-            CATALOG = do_discover(select_all=True)
+        CATALOG = args.catalog if args.catalog else do_discover(select_all=True)
         do_sync()
 
+    LOGGER.info(str(CATALOG))
 
 def main():
     try:
