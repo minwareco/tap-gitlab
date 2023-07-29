@@ -1256,7 +1256,7 @@ def main_impl():
         CONFIG['api_url'] += '/api/v4'
 
     if args.state:
-        STATE.update(args.state['value'])
+        STATE.update(args.state)
 
     # If discover flag was passed, log an info message and exit
     global CATALOG
