@@ -173,6 +173,9 @@
         "sha": {
             "type": ["null", "string"]
         },
+        "merge_commit_sha": {
+            "type": ["null", "string"]
+        },
         "squash_commit_sha": {
             "type": ["null", "string"]
         },
