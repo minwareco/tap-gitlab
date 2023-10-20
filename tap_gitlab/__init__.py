@@ -15,11 +15,12 @@ import pytz
 import backoff
 from strict_rfc3339 import rfc3339_to_timestamp
 from dateutil.parser import isoparse
+from dateutil.tz import tzutc
 import psutil
 import gc
 import asyncio
 
-from .gitlocal import GitLocal
+from gitlocal import GitLocal
 
 PER_PAGE_MAX = 100
 CONFIG = {
@@ -262,10 +263,20 @@ def get_url(entity, id, secondary_id=None, start_date=None, ref_name=None):
 
 def get_start(entity):
     if entity not in STATE or parse_datetime(STATE[entity]) < parse_datetime(CONFIG['start_date']):
-        STATE[entity] = CONFIG['start_date']
+        dates_to_compare = [
+            parse_datetime(CONFIG['start_date']),
+            datetime.datetime(1973, 3, 4, 0, 0, 0, 0, tzutc())
+        ]
+        STATE[entity] = max(dates_to_compare).isoformat()
     return STATE[entity]
 
 
+# TODO : when singer-python updates the backoff module
+# we should update this to pull the exact time to wait from the header 
+@backoff.on_predicate(backoff.expo,
+                      lambda x: x.status_code == 429,
+                      max_tries=10,
+                      jitter=backoff.random_jitter)
 @backoff.on_exception(backoff.expo,
                       (requests.exceptions.RequestException),
                       max_tries=5,
@@ -285,7 +296,8 @@ def request(url, params=None):
         LOGGER.info("Skipping request to {}".format(url))
         LOGGER.info("Reason: {} - {}".format(resp.status_code, resp.content))
         raise ResourceInaccessible
-    elif resp.status_code >= 400:
+    # if we are being rate limited, let the backoff logic run
+    elif resp.status_code != 429 and resp.status_code >= 400:
         LOGGER.critical(
             "Error making request to GitLab API: GET {} [{} - {}]".format(
                 url, resp.status_code, resp.content))

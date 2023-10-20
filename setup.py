@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 from setuptools import setup
+import os
 
 setup(name='tap-gitlab',
       version='0.9.15',
@@ -14,7 +15,8 @@ setup(name='tap-gitlab',
           'requests==2.20.0',
           'strict-rfc3339==0.7',
           'backoff==1.8.0',
-          'psutil==5.8.0'
+          'psutil==5.8.0',
+          'gitlocal@git+https://{}@github.com/minwareco/gitlocal.git@cffdf75345db9024b1026cb2b2ea31e35d135ce0'.format(os.environ.get("GITHUB_TOKEN", ""))
       ],
       entry_points='''
           [console_scripts]
