@@ -979,7 +979,6 @@ def sync_group(gid, pids, gitLocal):
                 sync_project(project["id"], gitLocal)
 
         group_subgroups_url = get_url("group_subgroups", id=gid)
-
         for group in gen_request(group_subgroups_url):
             if group['id']:
                 sync_group(group['id'], [], gitLocal)
