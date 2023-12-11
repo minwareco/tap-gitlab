@@ -1097,11 +1097,12 @@ def write_repository(raw_repo):
         return
 
     extraction_time = singer.utils.now()
+    org_name, repo_name = raw_repo["path_with_namespace"].split('/', 1)
     repo = {}
-    repo['id'] = 'gitlab/' + raw_repo["path_with_namespace"]
+    repo['id'] = 'gitlab/{}/{}'.format(org_name, repo_name)
     repo['source'] = 'gitlab'
-    repo['org_name'] = raw_repo["namespace"]["full_path"]
-    repo['repo_name'] = raw_repo["path"]
+    repo['org_name'] = org_name
+    repo['repo_name'] = repo_name
     repo['is_source_public'] = raw_repo["visibility"] != "private"
     # TODO: handle forks
     repo['fork_org_name'] = None
