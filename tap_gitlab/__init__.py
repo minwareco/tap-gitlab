@@ -981,8 +981,7 @@ def sync_group(gid, pids, gitLocal):
         group_subgroups_url = get_url("group_subgroups", id=gid)
 
         for group in gen_request(group_subgroups_url):
-            if group["name"]:
-                LOGGER.info('SUBGROUP {} - {}'.format(group['id'], group['full_path']))
+            if group['id']:
                 sync_group(group['id'], [], gitLocal)
     else:
         # Sync only specific projects of the group, if explicit projects are provided
