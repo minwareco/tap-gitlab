@@ -127,6 +127,11 @@ RESOURCES = {
         'key_properties': ['id'],
         'replication_method': 'FULL_TABLE',
     },
+    'group_subgroups': {
+        'url': '/groups/{id}/subgroups',
+        'schema': load_schema('groups'),
+        'key_properties': ['id'],
+    },
     'group_milestones': {
         'url': '/groups/{id}/milestones',
         'schema': load_schema('milestones'),
@@ -272,7 +277,7 @@ def get_start(entity):
 
 
 # TODO : when singer-python updates the backoff module
-# we should update this to pull the exact time to wait from the header 
+# we should update this to pull the exact time to wait from the header
 @backoff.on_predicate(backoff.expo,
                       lambda x: x.status_code == 429,
                       max_tries=10,
@@ -972,6 +977,13 @@ def sync_group(gid, pids, gitLocal):
         for project in gen_request(group_projects_url):
             if project["id"]:
                 sync_project(project["id"], gitLocal)
+
+        group_subgroups_url = get_url("group_subgroups", id=gid)
+
+        for group in gen_request(group_subgroups_url):
+            if group["name"]:
+                LOGGER.info('SUBGROUP {} - {}'.format(group['id'], group['full_path']))
+                sync_group(group['id'], [], gitLocal)
     else:
         # Sync only specific projects of the group, if explicit projects are provided
         for pid in pids:
