@@ -537,6 +537,10 @@ def sync_commit_files(project, heads, gitLocal):
         if headSha in fetchedCommits:
             continue
 
+        if headSha is None:
+            LOGGER.warn('sha for {} does not exist, skipping'.format(headRef))
+            continue
+
         # Emit the ref record as well if it's not for a pull request
         if not ('refs/pull' in headRef):
             refRecord = {
