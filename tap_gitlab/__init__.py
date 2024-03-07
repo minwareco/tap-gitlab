@@ -19,6 +19,7 @@ from dateutil.tz import tzutc
 import psutil
 import gc
 import asyncio
+from urllib.parse import urlparse
 
 from gitlocal import GitLocal
 
@@ -294,7 +295,12 @@ def request(url, params=None):
     if 'user_agent' in CONFIG:
         headers['User-Agent'] = CONFIG['user_agent']
 
-    resp = SESSION.request('GET', url, params=params, headers=headers)
+    proxies = None if urlparse(url).hostname.endswith('gitlab.com') else {
+        'http': os.getenv('MINWARE_PROXY', ''),
+        'https': os.getenv('MINWARE_PROXY', '')
+    }
+
+    resp = SESSION.request('GET', url, params=params, headers=headers, proxies=proxies)
     LOGGER.info("GET {} {}".format(url, params))
 
     if resp.status_code in [401, 403, 404]:
