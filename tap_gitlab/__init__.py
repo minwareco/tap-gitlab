@@ -271,7 +271,7 @@ def get_start(entity):
     if entity not in STATE or parse_datetime(STATE[entity]) < parse_datetime(CONFIG['start_date']):
         dates_to_compare = [
             parse_datetime(CONFIG['start_date']),
-            datetime.datetime(1973, 3, 4, 0, 0, 0, 0, tzutc())
+            datetime.datetime(1980, 1, 1, 0, 0, 0, 0, tzutc())
         ]
         STATE[entity] = max(dates_to_compare).isoformat()
     return STATE[entity]
