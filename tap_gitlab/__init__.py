@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 
 import datetime
@@ -1205,6 +1206,7 @@ def do_sync():
     gitLocal = GitLocal({
         'access_token': CONFIG['private_token'],
         'workingDir': '/tmp',
+        'proxy': os.environ.get("MINWARE_PROXY") if not domain.endswith('gitlab.com') else None 
     }, 'https://oauth2:{}@' + domain + '/{}.git',
         CONFIG['hmac_token'] if 'hmac_token' in CONFIG else None)
 
@@ -1300,8 +1302,6 @@ def main_impl():
     else:
         CATALOG = args.catalog if args.catalog else do_discover(select_all=True)
         do_sync()
-
-    LOGGER.info(str(CATALOG))
 
 def main():
     try:
