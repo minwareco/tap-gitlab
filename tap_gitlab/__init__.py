@@ -31,6 +31,7 @@ CONFIG = {
     'groups': '',
     'ultimate_license': False,
     'fetch_merge_request_commits': False,
+    'fetch_merge_request_notes': False,
     'fetch_pipelines_extended': False,
     'fetch_group_variables': False,
     'fetch_project_variables': False,
@@ -136,6 +137,7 @@ RESOURCES = {
         'url': '/groups/{id}/subgroups',
         'schema': load_schema('groups'),
         'key_properties': ['id'],
+        'replication_method': 'FULL_TABLE',
     },
     'group_milestones': {
         'url': '/groups/{id}/milestones',
@@ -229,12 +231,12 @@ RESOURCES = {
         'key_properties': ['id'],
         'replication_method': 'FULL_TABLE',
     },
-     'vulnerabilities': {
-            'url': '/projects/{id}/vulnerabilities',
-            'schema': load_schema('vulnerabilities'),
-            'key_properties': ['id'],
-            'replication_method': 'FULL_TABLE',
-        },
+    'vulnerabilities': {
+        'url': '/projects/{id}/vulnerabilities',
+        'schema': load_schema('vulnerabilities'),
+        'key_properties': ['id'],
+        'replication_method': 'FULL_TABLE',
+    },
     'project_variables': {
         'url': '/projects/{id}/variables',
         'schema': load_schema('project_variables'),
@@ -327,12 +329,6 @@ def request(url, params=None):
         LOGGER.info("Skipping request to {}".format(url))
         LOGGER.info("Reason: {} - {}".format(resp.status_code, resp.content))
         raise ResourceInaccessible
-    # if we are being rate limited, let the backoff logic run
-    elif resp.status_code != 429 and resp.status_code >= 400:
-        LOGGER.critical(
-            "Error making request to GitLab API: GET {} [{} - {}]".format(
-                url, resp.status_code, resp.content))
-        sys.exit(1)
 
     return resp
 
@@ -1039,6 +1035,8 @@ def sync_group(gid, pids, gitLocal):
 def sync_pipelines(project):
     entity = "pipelines"
     stream = CATALOG.get_stream(entity)
+    
+    LOGGER.info('Stream Pipelines: {}'.format(stream.is_selected()))
     if stream is None or not stream.is_selected():
         return
 
@@ -1160,7 +1158,7 @@ def sync_variables(entity, element="project"):
             transformed_row = transformer.transform(row, RESOURCES[element + "_variables"]["schema"], mdata)
             singer.write_record(element + "_variables", transformed_row, time_extracted=utils.now())
 
-def sync_project(pid):
+def sync_project(pid, gitLocal):
     url = get_url(entity="projects", id=pid)
 
     try:
@@ -1325,6 +1323,7 @@ def main_impl():
     CONFIG.update(args.config)
     CONFIG['ultimate_license'] = truthy(CONFIG['ultimate_license'])
     CONFIG['fetch_merge_request_commits'] = truthy(CONFIG['fetch_merge_request_commits'])
+    CONFIG['fetch_merge_request_notes'] = truthy(CONFIG['fetch_merge_request_notes'])
     CONFIG['fetch_pipelines_extended'] = truthy(CONFIG['fetch_pipelines_extended'])
     CONFIG['fetch_group_variables'] = truthy(CONFIG['fetch_group_variables'])
     CONFIG['fetch_project_variables'] = truthy(CONFIG['fetch_project_variables'])
