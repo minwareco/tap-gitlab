@@ -29,7 +29,11 @@ CONFIG = {
     'private_token': None,
     'start_date': None,
     'groups': '',
-    'ultimate_license': False
+    'ultimate_license': False,
+    'fetch_merge_request_commits': False,
+    'fetch_pipelines_extended': False,
+    'fetch_group_variables': False,
+    'fetch_project_variables': False,
 }
 STATE = {}
 CATALOG = None
@@ -231,10 +235,28 @@ RESOURCES = {
             'key_properties': ['id'],
             'replication_method': 'FULL_TABLE',
         },
+    'project_variables': {
+        'url': '/projects/{id}/variables',
+        'schema': load_schema('project_variables'),
+        'key_properties': ['project_id', 'key'],
+        'replication_method': 'FULL_TABLE',
+    },
+    'group_variables': {
+        'url': '/groups/{id}/variables',
+        'schema': load_schema('group_variables'),
+        'key_properties': ['group_id', 'key'],
+        'replication_method': 'FULL_TABLE',
+    }
 }
 
 ULTIMATE_RESOURCES = ("epics", "epic_issues")
-STREAM_CONFIG_SWITCHES = ('merge_request_commits', 'merge_request_notes', 'pipelines_extended')
+STREAM_CONFIG_SWITCHES = (
+    'merge_request_commits',
+    'merge_request_notes',
+    'pipelines_extended',
+    'group_variables',
+    'project_variables',
+)
 
 LOGGER = singer.get_logger()
 SESSION = requests.Session()
@@ -276,17 +298,15 @@ def get_start(entity):
         STATE[entity] = max(dates_to_compare).isoformat()
     return STATE[entity]
 
-
-# TODO : when singer-python updates the backoff module
-# we should update this to pull the exact time to wait from the header
-@backoff.on_predicate(backoff.expo,
-                      lambda x: x.status_code == 429,
-                      max_tries=10,
-                      jitter=backoff.random_jitter)
+@backoff.on_predicate(backoff.runtime,
+                      predicate=lambda r: r.status_code == 429,
+                      max_tries=5, 
+                      value=lambda r: int(r.headers.get("Retry-After")), 
+                      jitter=None)
 @backoff.on_exception(backoff.expo,
                       (requests.exceptions.RequestException),
                       max_tries=5,
-                      giveup=lambda e: e.response is not None and 400 <= e.response.status_code < 500, # pylint: disable=line-too-long
+                      giveup=lambda e: e.response is not None and e.response.status_code != 429 and 400 <= e.response.status_code < 500, # pylint: disable=line-too-long
                       factor=2)
 def request(url, params=None):
     params = params or {}
@@ -1004,6 +1024,8 @@ def sync_group(gid, pids, gitLocal):
 
     sync_labels(data, "group")
 
+    sync_variables(data, "group")
+
     if CONFIG['ultimate_license']:
         sync_epics(data)
 
@@ -1123,7 +1145,22 @@ def write_repository(raw_repo):
         rec = transformer.transform(repo, Schema.to_dict(stream.schema), metadata=metadata.to_map(stream.metadata))
     singer.write_record('repositories', rec, time_extracted=extraction_time)
 
-def sync_project(pid, gitLocal):
+def sync_variables(entity, element="project"):
+    stream_name = "{}_variables".format(element)
+    stream = CATALOG.get_stream(stream_name)
+    if stream is None or not stream.is_selected():
+        return
+    mdata = metadata.to_map(stream.metadata)
+
+    url = get_url(entity=element + "_variables", id=entity['id'])
+
+    with Transformer(pre_hook=format_timestamp) as transformer:
+        for row in gen_request(url):
+            row[element + '_id'] = entity['id']
+            transformed_row = transformer.transform(row, RESOURCES[element + "_variables"]["schema"], mdata)
+            singer.write_record(element + "_variables", transformed_row, time_extracted=utils.now())
+
+def sync_project(pid):
     url = get_url(entity="projects", id=pid)
 
     try:
@@ -1190,6 +1227,8 @@ def sync_project(pid, gitLocal):
         sync_tags(data)
         sync_pipelines(data)
         sync_vulnerabilities(data)
+        sync_variables(data)
+
 
 def do_sync():
     LOGGER.info("Starting sync")
@@ -1285,6 +1324,10 @@ def main_impl():
 
     CONFIG.update(args.config)
     CONFIG['ultimate_license'] = truthy(CONFIG['ultimate_license'])
+    CONFIG['fetch_merge_request_commits'] = truthy(CONFIG['fetch_merge_request_commits'])
+    CONFIG['fetch_pipelines_extended'] = truthy(CONFIG['fetch_pipelines_extended'])
+    CONFIG['fetch_group_variables'] = truthy(CONFIG['fetch_group_variables'])
+    CONFIG['fetch_project_variables'] = truthy(CONFIG['fetch_project_variables'])
 
     if '/api/' not in CONFIG['api_url']:
         CONFIG['api_url'] += '/api/v4'
