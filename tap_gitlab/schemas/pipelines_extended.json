@@ -1,44 +1,86 @@
 {
     "type": "object",
     "properties": {
-        "project_id": {
-            "type": ["null", "integer"]
+        "_sdc_repository": {
+            "type": "string"
         },
         "id": {
-            "type": ["null", "integer"]
+            "type": "integer"
+        },
+        "iid": {
+            "type": "integer"
+        },
+        "project_id": {
+            "type": "integer"
+        },
+        "name": {
+            "type": [
+                "null",
+                "string"
+            ]
         },
         "status": {
-            "type": ["null", "string"]
+            "type": [
+                "null",
+                "string"
+            ]
+        },
+        "source": {
+            "type": "string"
         },
         "ref": {
-            "type": ["null", "string"]
+            "type": [
+                "null",
+                "string"
+            ]
         },
         "sha": {
-            "type": ["null", "string"]
+            "type": [
+                "null",
+                "string"
+            ]
         },
         "before_sha": {
-            "type": ["null", "string"]
+            "type": [
+                "null",
+                "string"
+            ]
         },
         "tag": {
-            "type": ["null", "boolean"]
+            "type": [
+                "null",
+                "boolean"
+            ]
         },
         "yaml_errors": {
-            "type": ["null", "string"]
+            "type": [
+                "null",
+                "string"
+            ]
         },
         "user": {
             "type": "object",
             "properties": {
                 "name": {
-                  "type": "string"
+                    "type": [
+                        "null",
+                        "string"
+                    ]
                 },
                 "username": {
-                  "type": "string"
+                    "type": "string"
                 },
                 "id": {
-                  "type": "integer"
+                    "type": "integer"
                 },
                 "state": {
-                  "type": "string"
+                    "type": "string"
+                },
+                "avatar_url": {
+                    "type": "string"
+                },
+                "web_url": {
+                    "type": "string"
                 }
             }
         },
@@ -107,18 +149,63 @@
                 }
             ]
         },
-        "coverage": {
+        "queued_duration": {
             "anyOf": [
                 {
-                    "type": "number"
+                    "type": "integer"
                 },
                 {
                     "type": "null"
                 }
             ]
         },
+        "coverage": {
+            "type": [
+                "null",
+                "number"
+            ],
+            "format": "float"
+        },
         "web_url": {
-            "type": ["null", "string"]
+            "type": [
+                "null",
+                "string"
+            ]
+        },
+        "detailed_status": {
+            "type": "object",
+            "properties": {
+                "icon": {
+                    "type": "string"
+                },
+                "text": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "group": {
+                    "type": "string"
+                },
+                "tooltip": {
+                    "type": "string"
+                },
+                "has_details": {
+                    "type": "boolean"
+                },
+                "details_path": {
+                    "type": "string"
+                },
+                "illustration": {
+                    "type": [
+                        "null",
+                        "string"
+                    ]
+                },
+                "favicon": {
+                    "type": "string"
+                }
+            }
         }
     }
 }

@@ -1050,7 +1050,12 @@ def sync_pipelines(project):
     with Transformer(pre_hook=format_timestamp) as transformer:
         for row in gen_request(url):
 
-            transformed_row = transformer.transform(row, RESOURCES[entity]["schema"], mdata)
+            pipeline_record = {
+                **row,
+                'project_id': project['id'],
+                '_sdc_repository': project['path_with_namespace']
+            }
+            transformed_row = transformer.transform(pipeline_record, RESOURCES[entity]["schema"], mdata)
 
             # Write the Pipeline record
             singer.write_record(entity, transformed_row, time_extracted=utils.now())
@@ -1078,8 +1083,12 @@ def sync_pipelines_extended(project, pipeline):
 
     with Transformer(pre_hook=format_timestamp) as transformer:
         for row in gen_request(url):
-            row['project_id'] = project['id']
-            transformed_row = transformer.transform(row, RESOURCES[entity]["schema"], mdata)
+            pipeline_extended_record = {
+                **row,
+                'project_id': project['id'],
+                '_sdc_repository': project['path_with_namespace']
+            }
+            transformed_row = transformer.transform(pipeline_extended_record, RESOURCES[entity]["schema"], mdata)
 
             singer.write_record(entity, transformed_row, time_extracted=utils.now())
 
@@ -1108,13 +1117,13 @@ def sync_jobs(project, pipeline):
     url = get_url(entity=entity, id=project['id'], secondary_id=pipeline['id'])
     with Transformer(pre_hook=format_timestamp) as transformer:
         for row in gen_request(url):
-            row['project_id'] = project['id']
-            flatten_id(row, 'user')
-            flatten_id(row, 'commit')
-            flatten_id(row, 'pipeline')
-            flatten_id(row, 'runner')
-
-            transformed_row = transformer.transform(row, RESOURCES[entity]['schema'], mdata)
+            job_record = {
+                **row,
+                'project_id': project['id'],
+                'pipeline_id': pipeline['id'],
+                '_sdc_repository': project['path_with_namespace']
+            }
+            transformed_row = transformer.transform(job_record, RESOURCES[entity]['schema'], mdata)
             singer.write_record(entity, transformed_row, time_extracted=utils.now())
 
 def write_repository(raw_repo):
