@@ -1,20 +1,50 @@
 {
     "type": "object",
     "properties": {
+        "_sdc_repository": {
+            "type": "string"
+        },
         "id": {
-            "type": ["null", "integer"]
+            "type": "integer"
+        },
+        "iid": {
+            "type": "integer"
+        },
+        "project_id": {
+            "type": "integer"
         },
         "status": {
-            "type": ["null", "string"]
+            "type": [
+                "null",
+                "string"
+            ]
+        },
+        "source": {
+            "type": "string"
         },
         "ref": {
-            "type": ["null", "string"]
+            "type": [
+                "null",
+                "string"
+            ]
         },
         "sha": {
-            "type": ["null", "string"]
+            "type": [
+                "null",
+                "string"
+            ]
+        },
+        "name": {
+            "type": [
+                "null",
+                "string"
+            ]
         },
         "web_url": {
-            "type": ["null", "string"]
+            "type": [
+                "null",
+                "string"
+            ]
         },
         "created_at": {
             "anyOf": [

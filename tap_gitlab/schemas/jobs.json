@@ -1,35 +1,204 @@
 {
     "type": "object",
     "properties": {
-        "id": {
-            "type": ["null", "integer"]
+        "_sdc_repository": {
+            "type": "string"
         },
         "project_id": {
-            "type": ["null", "integer"]
-        },
-        "user_id": {
-            "type": ["null", "integer"]
-        },
-        "commit_id": {
-            "type": ["null", "string"]
+            "type": "integer"
         },
         "pipeline_id": {
-            "type": ["null", "integer"]
+            "type": "integer"
         },
-        "runner_id": {
-            "type": ["null", "integer"]
+        "id": {
+            "type": "integer"
+        },
+        "user_id": {
+            "type": [
+                "null",
+                "integer"
+            ]
+        },
+        "commit": {
+            "type": "object",
+            "properties": {
+                "author_email": {
+                    "type": "string"
+                },
+                "author_name": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "short_id": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "pipeline": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer"
+                },
+                "project_id": {
+                    "type": "integer"
+                },
+                "ref": {
+                    "type": "string"
+                },
+                "sha": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "runner": {
+            "type": [
+                "null",
+                "object"
+            ],
+            "properties": {
+                "id": {
+                    "type": "integer"
+                },
+                "description": {
+                    "type": [
+                        "null",
+                        "string"
+                    ]
+                },
+                "ip_address": {
+                    "type": [
+                        "null",
+                        "string"
+                    ]
+                },
+                "active": {
+                    "type": "boolean"
+                },
+                "paused": {
+                    "type": "boolean"
+                },
+                "is_shared": {
+                    "type": "boolean"
+                },
+                "runner_type": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": [
+                        "null",
+                        "string"
+                    ]
+                },
+                "online": {
+                    "type": "boolean"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "runner_manager": {
+            "type": [
+                "null",
+                "object"
+            ],
+            "properties": {
+                "id": {
+                    "type": "integer"
+                },
+                "system_id": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": [
+                        "null",
+                        "string"
+                    ]
+                },
+                "revision": {
+                    "type": [
+                        "null",
+                        "string"
+                    ]
+                },
+                "platform": {
+                    "type": [
+                        "null",
+                        "string"
+                    ]
+                },
+                "architecture": {
+                    "type": [
+                        "null",
+                        "string"
+                    ]
+                },
+                "is_shared": {
+                    "type": "boolean"
+                },
+                "ip_address": {
+                    "type": [
+                        "null",
+                        "string"
+                    ]
+                },
+                "status": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": [
+                        "null",
+                        "string"
+                    ],
+                    "format": "date-time"
+                },
+                "contacted_at": {
+                    "type": [
+                        "null",
+                        "string"
+                    ],
+                    "format": "date-time"
+                }
+            }
         },
         "name": {
-            "type": ["null", "string"]
+            "type": [
+                "null",
+                "string"
+            ]
         },
         "stage": {
-            "type": ["null", "string"]
+            "type": [
+                "null",
+                "string"
+            ]
         },
         "ref": {
-            "type": ["null", "string"]
+            "type": [
+                "null",
+                "string"
+            ]
         },
         "web_url": {
-            "type": ["null", "string"]
+            "type": [
+                "null",
+                "string"
+            ]
         },
         "status": {
             "anyOf": [
@@ -52,74 +221,142 @@
                 }
             ]
         },
-        "duration": {
-            "anyOf": [
-                {
-                    "type": "number",
-                    "format": "float"
-                },
-                {
-                    "type": "null"
-                }
+        "failure_reason": {
+            "type": [
+                "null",
+                "string"
             ]
+        },
+        "tag": {
+            "type": "boolean"
+        },
+        "duration": {
+            "type": [
+                "null",
+                "number"
+            ],
+            "format": "float"
+        },
+        "queued_duration": {
+            "type": [
+                "null",
+                "number"
+            ],
+            "format": "float"
         },
         "coverage": {
-            "anyOf": [
-                {
-                    "type": "number",
-                    "format": "float"
-                },
-                {
-                    "type": "null"
-                }
-            ]
+            "type": [
+                "null",
+                "number"
+            ],
+            "format": "float"
+        },
+        "archived": {
+            "type": "boolean"
         },
         "allow_failure": {
-            "type": ["null", "boolean"]
+            "type": [
+                "null",
+                "boolean"
+            ]
         },
         "created_at": {
-            "anyOf": [
-                {
-                    "type": "string",
-                    "format": "date-time"
-                },
-                {
-                    "type": "null"
-                }
-            ]
+            "type": [
+                "null",
+                "string"
+            ],
+            "format": "date-time"
         },
         "started_at": {
-            "anyOf": [
-                {
-                    "type": "string",
-                    "format": "date-time"
-                },
-                {
-                    "type": "null"
-                }
-            ]
+            "type": [
+                "null",
+                "string"
+            ],
+            "format": "date-time"
         },
         "finished_at": {
-            "anyOf": [
-                {
-                    "type": "string",
-                    "format": "date-time"
-                },
-                {
-                    "type": "null"
+            "type": [
+                "null",
+                "string"
+            ],
+            "format": "date-time"
+        },
+        "erased_at": {
+            "type": [
+                "null",
+                "string"
+            ],
+            "format": "date-time"
+        },
+        "artifacts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "file_type": {
+                        "type": "string"
+                    },
+                    "size": {
+                        "type": "integer"
+                    },
+                    "filename": {
+                        "type": "string"
+                    },
+                    "file_format": {
+                        "type": [
+                            "null",
+                            "string"
+                        ]
+                    }
                 }
-            ]
+            }
         },
         "artifacts_expire_at": {
-            "anyOf": [
-                {
-                    "type": "string",
-                    "format": "date-time"
-                },
-                {
-                    "type": "null"
+            "type": [
+                "null",
+                "string"
+            ],
+            "format": "date-time"
+        },
+        "tag_list": {
+            "items": {
+                "type": "string"
+            },
+            "type": "array"
+        },
+        "project": {
+            "type": "object",
+            "properties": {
+                "ci_job_token_scope_enabled": {
+                    "type": "boolean"
                 }
-            ]
+            }
+        },
+        "user": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": [
+                        "null",
+                        "string"
+                    ]
+                },
+                "username": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "state": {
+                    "type": "string"
+                },
+                "avatar_url": {
+                    "type": "string"
+                },
+                "web_url": {
+                    "type": "string"
+                }
+            }
         }
     }
 }
