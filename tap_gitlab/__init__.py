@@ -103,7 +103,7 @@ RESOURCES = {
         'replication_keys': ['updated_at'],
     },
     'jobs': {
-        'url': '/projects/{id}/pipelines/{secondary_id}/jobs',
+        'url': '/projects/{id}/pipelines/{secondary_id}/jobs?include_retried=true',
         'schema': load_schema('jobs'),
         'key_properties': ['id'],
         'replication_method': 'FULL_TABLE',
