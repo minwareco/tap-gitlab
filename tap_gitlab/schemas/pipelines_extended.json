@@ -59,7 +59,10 @@
             ]
         },
         "user": {
-            "type": "object",
+            "type": [
+                "null",
+                "object"
+            ],
             "properties": {
                 "name": {
                     "type": [
