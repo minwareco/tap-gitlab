@@ -237,7 +237,10 @@
             "format": "float"
         },
         "archived": {
-            "type": "boolean"
+            "type": [
+                "null",
+                "boolean"
+            ]
         },
         "allow_failure": {
             "type": [
