@@ -8,7 +8,10 @@
             "type": "integer"
         },
         "iid": {
-            "type": "integer"
+            "type": [
+                "null",
+                "integer"
+            ]
         },
         "project_id": {
             "type": "integer"
