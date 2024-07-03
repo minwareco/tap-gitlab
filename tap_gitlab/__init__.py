@@ -1036,7 +1036,6 @@ def sync_pipelines(project):
     entity = "pipelines"
     stream = CATALOG.get_stream(entity)
     
-    LOGGER.info('Stream Pipelines: {}'.format(stream.is_selected()))
     if stream is None or not stream.is_selected():
         return
 
