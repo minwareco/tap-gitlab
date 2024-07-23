@@ -20,7 +20,10 @@
             ]
         },
         "commit": {
-            "type": "object",
+            "type": [
+                "null",
+                "object"
+            ],
             "properties": {
                 "author_email": {
                     "type": "string"
