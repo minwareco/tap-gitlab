@@ -288,7 +288,10 @@
                         "type": "string"
                     },
                     "size": {
-                        "type": "integer"
+                        "type": [
+                            "null",
+                            "integer"
+                        ]
                     },
                     "filename": {
                         "type": "string"
