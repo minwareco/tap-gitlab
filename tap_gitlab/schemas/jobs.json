@@ -26,25 +26,43 @@
             ],
             "properties": {
                 "author_email": {
-                    "type": "string"
+                    "type": [
+                        "null",
+                        "string"
+                    ]
                 },
                 "author_name": {
-                    "type": "string"
+                    "type": [
+                        "null",
+                        "string"
+                    ]
                 },
                 "created_at": {
-                    "type": "string"
+                    "type": [
+                        "null",
+                        "string"
+                    ]
                 },
                 "id": {
                     "type": "string"
                 },
                 "message": {
-                    "type": "string"
+                    "type": [
+                        "null",
+                        "string"
+                    ]
                 },
                 "short_id": {
-                    "type": "string"
+                    "type": [
+                        "null",
+                        "string"
+                    ]
                 },
                 "title": {
-                    "type": "string"
+                    "type": [
+                        "null",
+                        "string"
+                    ]
                 }
             }
         },
@@ -58,13 +76,22 @@
                     "type": "integer"
                 },
                 "ref": {
-                    "type": "string"
+                    "type": [
+                        "null",
+                        "string"
+                    ]
                 },
                 "sha": {
-                    "type": "string"
+                    "type": [
+                        "null",
+                        "string"
+                    ]
                 },
                 "status": {
-                    "type": "string"
+                    "type": [
+                        "null",
+                        "string"
+                    ]
                 }
             }
         },
@@ -90,16 +117,28 @@
                     ]
                 },
                 "active": {
-                    "type": "boolean"
+                    "type": [
+                        "null",
+                        "boolean"
+                    ]
                 },
                 "paused": {
-                    "type": "boolean"
+                    "type": [
+                        "null",
+                        "boolean"
+                    ]
                 },
                 "is_shared": {
-                    "type": "boolean"
+                    "type": [
+                        "null",
+                        "boolean"
+                    ]
                 },
                 "runner_type": {
-                    "type": "string"
+                    "type": [
+                        "null",
+                        "string"
+                    ]
                 },
                 "name": {
                     "type": [
@@ -108,10 +147,16 @@
                     ]
                 },
                 "online": {
-                    "type": "boolean"
+                    "type": [
+                        "null",
+                        "boolean"
+                    ]
                 },
                 "status": {
-                    "type": "string"
+                    "type": [
+                        "null",
+                        "string"
+                    ]
                 }
             }
         },
@@ -152,7 +197,10 @@
                     ]
                 },
                 "is_shared": {
-                    "type": "boolean"
+                    "type": [
+                        "null",
+                        "boolean"
+                    ]
                 },
                 "ip_address": {
                     "type": [
@@ -161,7 +209,10 @@
                     ]
                 },
                 "status": {
-                    "type": "string"
+                    "type": [
+                        "null",
+                        "string"
+                    ]
                 },
                 "created_at": {
                     "type": [
@@ -216,7 +267,10 @@
             ]
         },
         "tag": {
-            "type": "boolean"
+            "type": [
+                "null",
+                "boolean"
+            ]
         },
         "duration": {
             "type": [
@@ -285,7 +339,10 @@
                 "type": "object",
                 "properties": {
                     "file_type": {
-                        "type": "string"
+                        "type": [
+                            "null",
+                            "string"
+                        ]
                     },
                     "size": {
                         "type": [
@@ -294,7 +351,10 @@
                         ]
                     },
                     "filename": {
-                        "type": "string"
+                        "type": [
+                            "null",
+                            "string"
+                        ]
                     },
                     "file_format": {
                         "type": [
@@ -322,7 +382,10 @@
             "type": "object",
             "properties": {
                 "ci_job_token_scope_enabled": {
-                    "type": "boolean"
+                    "type": [
+                        "null",
+                        "boolean"
+                    ]
                 }
             }
         },
@@ -339,19 +402,31 @@
                     ]
                 },
                 "username": {
-                    "type": "string"
+                    "type": [
+                        "null",
+                        "string"
+                    ]
                 },
                 "id": {
                     "type": "integer"
                 },
                 "state": {
-                    "type": "string"
+                    "type": [
+                        "null",
+                        "string"
+                    ]
                 },
                 "avatar_url": {
-                    "type": "string"
+                    "type": [
+                        "null",
+                        "string"
+                    ]
                 },
                 "web_url": {
-                    "type": "string"
+                    "type": [
+                        "null",
+                        "string"
+                    ]
                 }
             }
         }
