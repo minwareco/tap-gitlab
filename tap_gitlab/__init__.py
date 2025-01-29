@@ -307,9 +307,9 @@ def get_start(entity):
                       value=lambda r: int(r.headers.get("Retry-After")), 
                       jitter=None)
 @backoff.on_exception(backoff.expo,
-                      (requests.exceptions.RequestException),
+                      (requests.exceptions.RequestException, requests.exceptions.JSONDecodeError, simplejson.errors.JSONDecodeError),
                       max_tries=5,
-                      giveup=lambda e: e.response is not None and e.response.status_code != 429 and 400 <= e.response.status_code < 500, # pylint: disable=line-too-long
+                      giveup=lambda e: (hasattr(e, 'response') and e.response is not None and e.response.status_code != 429 and 400 <= e.response.status_code < 500),  # hasattr check needed since JSONDecodeError has no response
                       factor=2)
 def request(url, params=None):
     params = params or {}
@@ -330,6 +330,15 @@ def request(url, params=None):
         LOGGER.info("Skipping request to {}".format(url))
         LOGGER.info("Reason: {} - {}".format(resp.status_code, resp.content))
         raise ResourceInaccessible
+
+    # Try to parse JSON response - will retry if it fails
+    try:
+        resp.json()
+    except (requests.exceptions.JSONDecodeError, simplejson.errors.JSONDecodeError) as e:
+        LOGGER.warning(f"JSON decode error: {str(e)}")
+        LOGGER.warning(f"Response status code: {resp.status_code}")
+        LOGGER.warning(f"Response text: {resp.text}")
+        raise  # Let backoff retry
 
     return resp
 
@@ -1223,6 +1232,7 @@ def sync_project(pid, gitLocal):
         commitFiles = True
 
     if commitFiles:
+        return
         heads = sync_branches(data, True)
         # This function will utilize the state so that PR heads won't be returned if they haven't
         # been updated since the last run.
