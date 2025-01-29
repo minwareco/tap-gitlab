@@ -1252,26 +1252,6 @@ def sync_project(pid, gitLocal):
 def do_sync():
     LOGGER.info("Starting sync")
 
-    # Debug variables for direct API call
-    PROCESS_RESOURCE_TYPE = "jobs"  # We only want jobs
-    DEBUG_PROJECT_ID = 31339255     # The specific project ID
-    DEBUG_PIPELINE_ID = 1370045321  # The specific pipeline ID
-
-    # If we're in debug mode, just make the direct API call
-    if PROCESS_RESOURCE_TYPE == "jobs":
-        url = CONFIG['api_url'] + f'/projects/{DEBUG_PROJECT_ID}/pipelines/{DEBUG_PIPELINE_ID}/jobs?include_retried=true'
-        try:
-            LOGGER.info(f"Making direct call to: {url}")
-            resp = request(url)
-            LOGGER.info(f"Response status: {resp.status_code}")
-            LOGGER.info(f"Response headers: {resp.headers}")
-            LOGGER.info(f"Response text: {resp.text}")
-            return
-        except Exception as e:
-            LOGGER.error(f"Error making direct call: {str(e)}")
-            return
-
-    # Original do_sync code...
     gids = list(filter(None, CONFIG['groups'].split(' ')))
     pids = list(filter(None, CONFIG['projects'].split(' ')))
 
