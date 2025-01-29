@@ -308,7 +308,7 @@ def get_start(entity):
 @backoff.on_exception(backoff.expo,
                       (requests.exceptions.RequestException, requests.exceptions.JSONDecodeError),
                       max_tries=5,
-                      giveup=lambda e: (hasattr(e, 'response') and e.response is not None and e.response.status_code != 429 and 400 <= e.response.status_code < 500),  # hasattr check needed since JSONDecodeError has no response
+                      giveup=lambda e: (hasattr(e, 'response') and e.response is not None and e.response.status_code != 429 and 400 <= e.response.status_code < 500),  # pylint: disable=line-too-long
                       factor=2)
 def request(url, params=None):
     params = params or {}
