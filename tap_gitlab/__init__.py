@@ -366,7 +366,6 @@ def gen_request(url):
             params['page'] = int(next_page)
             resp = request(url, params)
             resp_json = resp.json()
-                
             # handle endpoints that return a single JSON object
             if isinstance(resp_json, dict):
                 yield resp_json
