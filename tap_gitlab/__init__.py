@@ -10,8 +10,6 @@ import singer
 from singer import Transformer, utils, metadata, metrics
 from singer.catalog import Catalog, CatalogEntry
 from singer.schema import Schema
-from dataclasses import dataclass
-from typing import Any
 
 import pytz
 import backoff
@@ -40,19 +38,6 @@ CONFIG = {
 }
 STATE = {}
 CATALOG = None
-
-@dataclass
-class GitlabResponse:
-    response: requests.Response
-    json_data: Any
-
-    @property
-    def status_code(self) -> int:
-        return self.response.status_code
-
-    @property
-    def headers(self):
-        return self.response.headers
 
 def parse_datetime(datetime_str):
     dt = isoparse(datetime_str)
@@ -323,9 +308,9 @@ def get_start(entity):
 @backoff.on_exception(backoff.expo,
                       (requests.exceptions.RequestException, requests.exceptions.JSONDecodeError),
                       max_tries=5,
-                      giveup=lambda e: (hasattr(e, 'response') and e.response is not None and e.response.status_code != 429 and 400 <= e.response.status_code < 500),  # hasattr check needed since JSONDecodeError has no response
+                      giveup=lambda e: (hasattr(e, 'response') and e.response is not None and e.response.status_code != 429 and 400 <= e.response.status_code < 500),  # pylint: disable=line-too-long
                       factor=2)
-def request(url, params=None) -> GitlabResponse:
+def request(url, params=None):
     params = params or {}
 
     headers = { "Private-Token": CONFIG['private_token'] }
@@ -345,16 +330,16 @@ def request(url, params=None) -> GitlabResponse:
         LOGGER.info("Reason: {} - {}".format(resp.status_code, resp.content))
         raise ResourceInaccessible
 
-    # Parse JSON response - will retry if it fails
+    # Try to parse JSON response - will retry if it fails
     try:
-        resp_json = resp.json()
+        resp.json()
     except requests.exceptions.JSONDecodeError as e:
         LOGGER.warning(f"JSON decode error: {str(e)}")
         LOGGER.warning(f"Response status code: {resp.status_code}")
         LOGGER.warning(f"Response text: {resp.text}")
         raise  # Let backoff retry
 
-    return GitlabResponse(response=resp, json_data=resp_json)
+    return resp
 
 def gen_request(url):
     if 'labels' in url:
@@ -378,15 +363,16 @@ def gen_request(url):
     try:
         while next_page:
             params['page'] = int(next_page)
-            gitlab_resp = request(url, params)
+            resp = request(url, params)
+            resp_json = resp.json()
             # handle endpoints that return a single JSON object
-            if isinstance(gitlab_resp.json_data, dict):
-                yield gitlab_resp.json_data
+            if isinstance(resp_json, dict):
+                yield resp_json
             # handle endpoints that return an array of JSON objects
             else:
-                for row in gitlab_resp.json_data:
+                for row in resp_json:
                     yield row
-            next_page = gitlab_resp.headers.get('X-Next-Page', None)
+            next_page = resp.headers.get('X-Next-Page', None)
     except ResourceInaccessible as exc:
         # Don't halt execution if a Resource is Inaccessible
         # Just skip it and continue with the rest of the extraction
@@ -1012,7 +998,7 @@ def sync_group(gid, pids, gitLocal):
     url = get_url(entity="groups", id=gid)
 
     try:
-        data = request(url).json_data
+        data = request(url).json()
     except ResourceInaccessible as exc:
         # Don't halt execution if a Group is Inaccessible
         # Just skip it and continue with the rest of the extraction
@@ -1193,7 +1179,7 @@ def sync_project(pid, gitLocal):
     url = get_url(entity="projects", id=pid)
 
     try:
-        data = request(url).json_data
+        data = request(url).json()
     except ResourceInaccessible as exc:
         # Don't halt execution if a Project is Inaccessible
         # Just skip it and continue with the rest of the extraction
