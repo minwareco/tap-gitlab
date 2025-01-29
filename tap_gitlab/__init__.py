@@ -20,7 +20,6 @@ import psutil
 import gc
 import asyncio
 from urllib.parse import urlparse
-import simplejson
 
 from gitlocal import GitLocal
 
@@ -307,7 +306,7 @@ def get_start(entity):
                       value=lambda r: int(r.headers.get("Retry-After")), 
                       jitter=None)
 @backoff.on_exception(backoff.expo,
-                      (requests.exceptions.RequestException, requests.exceptions.JSONDecodeError, simplejson.errors.JSONDecodeError),
+                      (requests.exceptions.RequestException, requests.exceptions.JSONDecodeError),
                       max_tries=5,
                       giveup=lambda e: (hasattr(e, 'response') and e.response is not None and e.response.status_code != 429 and 400 <= e.response.status_code < 500),  # hasattr check needed since JSONDecodeError has no response
                       factor=2)
@@ -334,7 +333,7 @@ def request(url, params=None):
     # Try to parse JSON response - will retry if it fails
     try:
         resp.json()
-    except (requests.exceptions.JSONDecodeError, simplejson.errors.JSONDecodeError) as e:
+    except requests.exceptions.JSONDecodeError as e:
         LOGGER.warning(f"JSON decode error: {str(e)}")
         LOGGER.warning(f"Response status code: {resp.status_code}")
         LOGGER.warning(f"Response text: {resp.text}")
