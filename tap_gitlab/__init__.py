@@ -20,6 +20,7 @@ import psutil
 import gc
 import asyncio
 from urllib.parse import urlparse
+import simplejson
 
 from gitlocal import GitLocal
 
@@ -355,7 +356,19 @@ def gen_request(url):
         while next_page:
             params['page'] = int(next_page)
             resp = request(url, params)
-            resp_json = resp.json()
+            try:
+                resp_json = resp.json()
+            except (requests.exceptions.JSONDecodeError, simplejson.errors.JSONDecodeError) as e:
+                # Log the error and response details
+                LOGGER.warning(f"JSON decode error on first attempt: {str(e)}")
+                LOGGER.warning(f"Response status code: {resp.status_code}")
+                LOGGER.warning(f"Response text: {resp.text}")
+                
+                # Retry the request once
+                LOGGER.info("Retrying request once...")
+                resp = request(url, params)
+                resp_json = resp.json()  # If this fails again, let it raise
+                
             # handle endpoints that return a single JSON object
             if isinstance(resp_json, dict):
                 yield resp_json
