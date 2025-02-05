@@ -317,8 +317,8 @@ def get_start(entity):
 
 @backoff.on_predicate(backoff.runtime,
                       predicate=lambda r: r.status_code == 429,
-                      max_tries=5, 
-                      value=lambda r: int(r.headers.get("Retry-After")), 
+                      max_tries=5,
+                      value=lambda r: int(r.headers.get("Retry-After")),
                       jitter=None)
 @backoff.on_exception(backoff.expo,
                       (requests.exceptions.RequestException, requests.exceptions.JSONDecodeError),
@@ -611,8 +611,8 @@ def sync_commit_files(project, heads, gitLocal):
         while True:
             # Get commits one page at a time
             if hasLocal:
-                commits = gitLocal.getCommitsFromHead(repo_path, headSha, limit = LOG_PAGE_SIZE,
-                    offset = offset)
+                commits = gitLocal.getCommitsFromHeadPyGit(repo_path, headSha,
+                    limit = LOG_PAGE_SIZE, offset = offset, skipAtCommits=fetchedCommits)
             extraction_time = singer.utils.now()
             for commit in commits:
                 # Skip commits we've already imported
@@ -1058,7 +1058,7 @@ def sync_group(gid, pids, gitLocal):
 def sync_pipelines(project):
     entity = "pipelines"
     stream = CATALOG.get_stream(entity)
-    
+
     if stream is None or not stream.is_selected():
         return
 
@@ -1273,7 +1273,7 @@ def do_sync():
     gitLocal = GitLocal({
         'access_token': CONFIG['private_token'],
         'workingDir': '/tmp',
-        'proxy': os.environ.get("MINWARE_PROXY") if not domain.endswith('gitlab.com') else None 
+        'proxy': os.environ.get("MINWARE_PROXY") if not domain.endswith('gitlab.com') else None
     }, 'https://oauth2:{}@' + domain + '/{}.git',
         CONFIG['hmac_token'] if 'hmac_token' in CONFIG else None)
 
