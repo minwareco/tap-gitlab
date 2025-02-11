@@ -608,6 +608,7 @@ def sync_commit_files(project, heads, gitLocal):
             continue
 
         offset = 0
+        newlyFetchedCommits = {}
         while True:
             # Get commits one page at a time
             if hasLocal:
@@ -616,19 +617,19 @@ def sync_commit_files(project, heads, gitLocal):
             extraction_time = singer.utils.now()
             for commit in commits:
                 # Skip commits we've already imported
-                if commit['sha'] in fetchedCommits:
+                if commit['sha'] in fetchedCommits or commit['sha'] in newlyFetchedCommits:
                     continue
 
                 commitQ.append(commit)
 
                 # Record that we have now fetched this commit
-                fetchedCommits[commit['sha']] = 1
+                newlyFetchedCommits[commit['sha']] = 1
                 # No longer a missing parent
                 missingParents.pop(commit['sha'], None)
 
                 # Keep track of new missing parents
                 for parent in commit['parents']:
-                    if not parent['sha'] in fetchedCommits:
+                    if not parent['sha'] in fetchedCommits and not parent['sha'] in newlyFetchedCommits:
                         missingParents[parent['sha']] = 1
 
             # If there are no missing parents, then we are done prior to reaching the lst page
@@ -641,6 +642,9 @@ def sync_commit_files(project, heads, gitLocal):
             else:
                 raise Exception('Some commit parents never found: ' + \
                     ','.join(missingParents.keys()))
+
+        # After successfully processing all commits for this head, add them to fetchedCommits
+        fetchedCommits.update(newlyFetchedCommits)
 
     # Now run through all the commits in parallel
     gc.collect()
