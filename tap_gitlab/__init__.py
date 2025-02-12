@@ -1289,7 +1289,8 @@ def do_sync():
         'workingDir': '/tmp',
         'proxy': os.environ.get("MINWARE_PROXY") if not domain.endswith('gitlab.com') else None
     }, 'https://oauth2:{}@' + domain + '/{}.git',
-        CONFIG['hmac_token'] if 'hmac_token' in CONFIG else None)
+        CONFIG['hmac_token'] if 'hmac_token' in CONFIG else None,
+        LOGGER)
 
     sync_site_users()
 
