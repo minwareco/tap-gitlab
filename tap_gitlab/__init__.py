@@ -24,6 +24,7 @@ import asyncio
 from urllib.parse import urlparse
 
 from gitlocal import GitLocal
+from gitlocal.logging import SecureLogger
 
 PER_PAGE_MAX = 100
 CONFIG = {
@@ -275,7 +276,7 @@ STREAM_CONFIG_SWITCHES = (
     'project_variables',
 )
 
-LOGGER = singer.get_logger()
+LOGGER = SecureLogger(singer.get_logger())
 SESSION = requests.Session()
 
 TRUTHY = ("true", "1", "yes", "on")
@@ -332,10 +333,19 @@ def request(url, params=None) -> GitlabResponse:
     if 'user_agent' in CONFIG:
         headers['User-Agent'] = CONFIG['user_agent']
 
-    proxies = None if urlparse(url).hostname.endswith('gitlab.com') else {
-        'http': os.getenv('MINWARE_PROXY', ''),
-        'https': os.getenv('MINWARE_PROXY', '')
-    }
+    # Modify the proxy configuration
+    proxy_url = os.getenv('MINWARE_PROXY', '')
+    hostname = urlparse(url).hostname
+    LOGGER.info(f"URL hostname: {hostname}")
+    LOGGER.info(f"Proxy URL: '{proxy_url}'")  # Added quotes to see if it's empty
+    LOGGER.info(f"All environment variables: {dict(os.environ)}")  # Log all env vars to debug
+    
+    proxies = None if hostname.endswith('gitlab.com') else {
+        'http': proxy_url,
+        'https': proxy_url
+    } if proxy_url else None
+    
+    LOGGER.info(f"Using proxies: {proxies}")
 
     resp = SESSION.request('GET', url, params=params, headers=headers, proxies=proxies)
     LOGGER.info("GET {} {}".format(url, params))
@@ -1354,6 +1364,7 @@ def main_impl():
     # TODO: Address properties that are required or not
     args = utils.parse_args(["private_token", "projects"])
     args.config["private_token"] = args.config["private_token"].strip()
+    LOGGER.addToken(args.config["private_token"])
 
     CONFIG.update(args.config)
     CONFIG['ultimate_license'] = truthy(CONFIG['ultimate_license'])
