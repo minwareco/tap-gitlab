@@ -23,8 +23,7 @@ import gc
 import asyncio
 from urllib.parse import urlparse
 
-from gitlocal import GitLocal
-from gitlocal.logging import SecureLogger
+from minware_singer_utils import GitLocal, SecureLogger
 
 PER_PAGE_MAX = 100
 CONFIG = {

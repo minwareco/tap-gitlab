@@ -3,6 +3,8 @@
 from setuptools import setup
 import os
 
+UTILS_VERSION = "22f493552c4eb46b2b5a6d98d7acacd9fb7edf68"
+
 setup(name='tap-gitlab',
       version='0.9.15',
       description='Singer.io tap for extracting data from the GitLab API',
@@ -16,7 +18,10 @@ setup(name='tap-gitlab',
           'strict-rfc3339==0.7',
           'backoff==2.2.1',
           'psutil==5.8.0',
-          'gitlocal@git+https://{}@github.com/minwareco/gitlocal.git'.format(os.environ.get("GITHUB_TOKEN", ""))
+          'minware-singer-utils@git+https://{}@github.com/minwareco/minware-singer-utils.git{}'.format(
+              os.environ.get("GITHUB_TOKEN", ""),
+              UTILS_VERSION
+          )
       ],
       entry_points='''
           [console_scripts]
