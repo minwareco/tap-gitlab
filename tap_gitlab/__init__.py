@@ -23,7 +23,7 @@ import gc
 import asyncio
 from urllib.parse import urlparse
 
-from gitlocal import GitLocal
+from minware_singer_utils import GitLocal, SecureLogger
 
 PER_PAGE_MAX = 100
 CONFIG = {
@@ -275,7 +275,7 @@ STREAM_CONFIG_SWITCHES = (
     'project_variables',
 )
 
-LOGGER = singer.get_logger()
+LOGGER = SecureLogger(singer.get_logger())
 SESSION = requests.Session()
 
 TRUTHY = ("true", "1", "yes", "on")
@@ -1279,7 +1279,8 @@ def do_sync():
         'workingDir': '/tmp',
         'proxy': os.environ.get("MINWARE_PROXY") if not domain.endswith('gitlab.com') else None
     }, 'https://oauth2:{}@' + domain + '/{}.git',
-        CONFIG['hmac_token'] if 'hmac_token' in CONFIG else None)
+        CONFIG['hmac_token'] if 'hmac_token' in CONFIG else None,
+        LOGGER)
 
     sync_site_users()
 
@@ -1354,6 +1355,7 @@ def main_impl():
     # TODO: Address properties that are required or not
     args = utils.parse_args(["private_token", "projects"])
     args.config["private_token"] = args.config["private_token"].strip()
+    LOGGER.addToken(args.config["private_token"])
 
     CONFIG.update(args.config)
     CONFIG['ultimate_license'] = truthy(CONFIG['ultimate_license'])
