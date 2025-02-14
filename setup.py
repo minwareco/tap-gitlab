@@ -18,8 +18,9 @@ setup(name='tap-gitlab',
           'strict-rfc3339==0.7',
           'backoff==2.2.1',
           'psutil==5.8.0',
-          'minware-singer-utils@git+https://{}@github.com/minwareco/minware-singer-utils.git{}'.format(
-              os.environ.get("GITHUB_TOKEN", ""),
+          
+          'minware_singer_utils@git+https://{}github.com/minwareco/minware-singer-utils.git@{}'.format(
+              "{}@".format(os.environ.get("GITHUB_TOKEN")) if os.environ.get("GITHUB_TOKEN") else "",
               UTILS_VERSION
           )
       ],
