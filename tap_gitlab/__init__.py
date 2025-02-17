@@ -6,6 +6,7 @@ import os
 import re
 import json
 import requests
+import traceback
 import singer
 from singer import Transformer, utils, metadata, metrics
 from singer.catalog import Catalog, CatalogEntry
@@ -315,6 +316,10 @@ def get_start(entity):
         STATE[entity] = max(dates_to_compare).isoformat()
     return STATE[entity]
 
+
+latest_response = None
+latest_request = None
+
 @backoff.on_predicate(backoff.runtime,
                       predicate=lambda r: r.status_code == 429,
                       max_tries=5,
@@ -326,6 +331,8 @@ def get_start(entity):
                       giveup=lambda e: (hasattr(e, 'response') and e.response is not None and e.response.status_code != 429 and 400 <= e.response.status_code < 500),  # hasattr check needed since JSONDecodeError has no response
                       factor=2)
 def request(url, params=None) -> GitlabResponse:
+    global latest_response
+    global latest_request
     params = params or {}
 
     headers = { "Private-Token": CONFIG['private_token'] }
@@ -336,8 +343,10 @@ def request(url, params=None) -> GitlabResponse:
         'http': os.getenv('MINWARE_PROXY', ''),
         'https': os.getenv('MINWARE_PROXY', '')
     }
-
+    latest_request = { 'method': 'GET', 'url': url, 'params': params}
     resp = SESSION.request('GET', url, params=params, headers=headers, proxies=proxies)
+    latest_response = resp
+    
     LOGGER.info("GET {} {}".format(url, params))
 
     if resp.status_code in [401, 403, 404]:
@@ -1385,8 +1394,17 @@ def main():
     try:
         main_impl()
     except Exception as exc:
-        LOGGER.critical(exc)
-        raise exc
+        global latest_response
+        global latest_request
+        for line in traceback.format_exc().splitlines():
+            LOGGER.critical(line)
+        if latest_response and latest_request:
+            LOGGER.critical('Latest Request URL: {}'.format(latest_request['url']))
+            LOGGER.critical('Response Code: {}'.format(latest_response.status_code))
+            LOGGER.critical('Response Data:')
+            LOGGER.critical(latest_response.text)
+
+        sys.exit(1)
 
 
 if __name__ == '__main__':
