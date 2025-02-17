@@ -1402,7 +1402,6 @@ def main():
             LOGGER.critical('Latest Request URL: {}'.format(latest_request['url']))
             LOGGER.critical('Response Code: {}'.format(latest_response.status_code))
             LOGGER.critical('Response Data:')
-            # this is different than the abovce so that logger can get this as valid json and remove data from sensitive fields
             LOGGER.critical(latest_response.text)
 
         sys.exit(1)
