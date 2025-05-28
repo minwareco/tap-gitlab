@@ -324,12 +324,14 @@ latest_request = None
                       predicate=lambda r: r.status_code == 429,
                       max_tries=5,
                       value=lambda r: int(r.headers.get("Retry-After")),
-                      jitter=None)
+                      jitter=None,
+                      logger=LOGGER)
 @backoff.on_exception(backoff.expo,
                       (requests.exceptions.RequestException, requests.exceptions.JSONDecodeError),
                       max_tries=5,
                       giveup=lambda e: (hasattr(e, 'response') and e.response is not None and e.response.status_code != 429 and 400 <= e.response.status_code < 500),  # hasattr check needed since JSONDecodeError has no response
-                      factor=2)
+                      factor=2,
+                      logger=LOGGER)
 def request(url, params=None) -> GitlabResponse:
     global latest_response
     global latest_request
