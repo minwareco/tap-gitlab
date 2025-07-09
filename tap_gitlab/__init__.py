@@ -1034,7 +1034,7 @@ def sync_epics(group):
 
     singer.write_state(STATE)
 
-def sync_group(gid, pids, gitLocal, selected_stream_ids):
+def sync_group(gid, pids, gitLocal, commits_only):
     stream = CATALOG.get_stream("groups")
     mdata = metadata.to_map(stream.metadata)
     url = get_url(entity="groups", id=gid)
@@ -1053,17 +1053,17 @@ def sync_group(gid, pids, gitLocal, selected_stream_ids):
         group_projects_url = get_url(entity="group_projects", id=gid)
         for project in gen_request(group_projects_url):
             if project["id"]:
-                sync_project(project["id"], gitLocal, selected_stream_ids)
+                sync_project(project["id"], gitLocal, commits_only)
 
         group_subgroups_url = get_url("group_subgroups", id=gid)
         for group in gen_request(group_subgroups_url):
             if group['id']:
-                sync_group(group['id'], [], gitLocal, selected_stream_ids)
+                sync_group(group['id'], [], gitLocal, commits_only)
     else:
         # Sync only specific projects of the group, if explicit projects are provided
         for pid in pids:
             if pid.startswith(data['full_path'] + '/') or pid in [str(p['id']) for p in data['projects']]:
-                sync_project(pid, gitLocal, selected_stream_ids)
+                sync_project(pid, gitLocal, commits_only)
 
     sync_milestones(data, "group")
 
@@ -1217,7 +1217,7 @@ def sync_variables(entity, element="project"):
             transformed_row = transformer.transform(row, RESOURCES[element + "_variables"]["schema"], mdata)
             singer.write_record(element + "_variables", transformed_row, time_extracted=utils.now())
 
-def sync_project(pid, gitLocal, selected_stream_ids):
+def sync_project(pid, gitLocal, commits_only):
     url = get_url(entity="projects", id=pid)
 
     try:
@@ -1268,7 +1268,7 @@ def sync_project(pid, gitLocal, selected_stream_ids):
         # all the PR heads with gitlab like it does for github.
         pr_heads = sync_merge_requests(data, True)
         heads.update(pr_heads)
-        commits_only = 'commit_files_meta' in selected_stream_ids
+        # commits_only is now passed as parameter
         sync_commit_files(data, heads, gitLocal, commits_only)
     elif data['last_activity_at'] >= get_start(state_key):
         sync_members(data)
@@ -1312,8 +1312,9 @@ def do_sync():
     gids = list(filter(None, CONFIG['groups'].split(' ')))
     pids = list(filter(None, CONFIG['projects'].split(' ')))
 
-    # Get selected stream IDs
+    # Get selected stream IDs and determine commit-only mode
     selected_stream_ids = get_selected_streams(CATALOG)
+    commits_only = 'commit_files_meta' in selected_stream_ids
 
     for stream in CATALOG.get_selected_streams(STATE):
         singer.write_schema(stream.tap_stream_id, stream.schema.to_dict(), stream.key_properties)
@@ -1334,12 +1335,12 @@ def do_sync():
     LOGGER.info(gids)
 
     for gid in gids:
-        sync_group(gid, pids, gitLocal, selected_stream_ids)
+        sync_group(gid, pids, gitLocal, commits_only)
 
     if not gids:
         # When not syncing groups
         for pid in pids:
-            sync_project(pid, gitLocal, selected_stream_ids)
+            sync_project(pid, gitLocal, commits_only)
 
     # Write the final STATE
     # This fixes syncing using groups, which don't emit a STATE message
