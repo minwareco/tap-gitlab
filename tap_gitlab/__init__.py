@@ -38,7 +38,6 @@ CONFIG = {
     'fetch_pipelines_extended': False,
     'fetch_group_variables': False,
     'fetch_project_variables': False,
-    'commits_only': False,
 }
 STATE = {}
 CATALOG = None
@@ -528,30 +527,26 @@ def sync_commits(project, heads):
     singer.write_state(STATE)
 
 
-def get_commit_detail_local(commit, repo_path, gitLocal, commits_only=False):
+def get_commit_detail_local(commit, repo_path, gitLocal):
     try:
-        if commits_only:
-            # In commit-only mode, skip file diff processing and return empty files list
-            commit['files'] = []
-        else:
-            changes = gitLocal.getCommitDiff(repo_path, commit['sha'])
-            commit['files'] = changes
+        changes = gitLocal.getCommitDiff(repo_path, commit['sha'])
+        commit['files'] = changes
     except Exception as e:
         # This generally shouldn't happen since we've already fetched and checked out the head
         # commit successfully, so it probably indicates some sort of system error. Just let it
         # bubble up for now.
         raise e
 
-def get_commit_changes(commit, repo_path, useLocal, gitLocal, commits_only=False):
-    get_commit_detail_local(commit, repo_path, gitLocal, commits_only)
+def get_commit_changes(commit, repo_path, useLocal, gitLocal):
+    get_commit_detail_local(commit, repo_path, gitLocal)
     commit['_sdc_repository'] = repo_path
     commit['id'] = '{}/{}'.format(repo_path, commit['sha'])
     return commit
 
-async def getChangedfilesForCommits(commits, repo_path, hasLocal, gitLocal, commits_only=False):
+async def getChangedfilesForCommits(commits, repo_path, hasLocal, gitLocal):
     coros = []
     for commit in commits:
-        changesCoro = asyncio.to_thread(get_commit_changes, commit, repo_path, hasLocal, gitLocal, commits_only)
+        changesCoro = asyncio.to_thread(get_commit_changes, commit, repo_path, hasLocal, gitLocal)
         coros.append(changesCoro)
     results = await asyncio.gather(*coros)
     return results
@@ -686,8 +681,15 @@ def sync_commit_files(project, heads, gitLocal, commits_only=False):
         # Slice off the queue to avoid memory leaks
         curQ = commitQ[0:BATCH_SIZE]
         commitQ = commitQ[BATCH_SIZE:]
-        changedFileList = asyncio.run(getChangedfilesForCommits(curQ, repo_path, hasLocal,
-            gitLocal, commits_only))
+        if commits_only:
+            for commit in curQ:
+                commit['files'] = []
+                commit['_sdc_repository'] = repo_path
+                commit['id'] = '{}/{}'.format(repo_path, commit['sha'])
+            changedFileList = curQ
+        else:
+            changedFileList = asyncio.run(getChangedfilesForCommits(curQ, repo_path, hasLocal,
+                gitLocal))
         for commitfiles in changedFileList:
             with Transformer(pre_hook=format_timestamp) as transformer:
                 rec = transformer.transform(commitfiles, RESOURCES[entity]["schema"], mdata)
@@ -1032,7 +1034,7 @@ def sync_epics(group):
 
     singer.write_state(STATE)
 
-def sync_group(gid, pids, gitLocal, commits_only=False):
+def sync_group(gid, pids, gitLocal, selected_stream_ids):
     stream = CATALOG.get_stream("groups")
     mdata = metadata.to_map(stream.metadata)
     url = get_url(entity="groups", id=gid)
@@ -1051,17 +1053,17 @@ def sync_group(gid, pids, gitLocal, commits_only=False):
         group_projects_url = get_url(entity="group_projects", id=gid)
         for project in gen_request(group_projects_url):
             if project["id"]:
-                sync_project(project["id"], gitLocal, commits_only)
+                sync_project(project["id"], gitLocal, selected_stream_ids)
 
         group_subgroups_url = get_url("group_subgroups", id=gid)
         for group in gen_request(group_subgroups_url):
             if group['id']:
-                sync_group(group['id'], [], gitLocal, commits_only)
+                sync_group(group['id'], [], gitLocal, selected_stream_ids)
     else:
         # Sync only specific projects of the group, if explicit projects are provided
         for pid in pids:
             if pid.startswith(data['full_path'] + '/') or pid in [str(p['id']) for p in data['projects']]:
-                sync_project(pid, gitLocal, commits_only)
+                sync_project(pid, gitLocal, selected_stream_ids)
 
     sync_milestones(data, "group")
 
@@ -1215,7 +1217,7 @@ def sync_variables(entity, element="project"):
             transformed_row = transformer.transform(row, RESOURCES[element + "_variables"]["schema"], mdata)
             singer.write_record(element + "_variables", transformed_row, time_extracted=utils.now())
 
-def sync_project(pid, gitLocal, commits_only=False):
+def sync_project(pid, gitLocal, selected_stream_ids):
     url = get_url(entity="projects", id=pid)
 
     try:
@@ -1266,6 +1268,7 @@ def sync_project(pid, gitLocal, commits_only=False):
         # all the PR heads with gitlab like it does for github.
         pr_heads = sync_merge_requests(data, True)
         heads.update(pr_heads)
+        commits_only = 'commit_files_meta' in selected_stream_ids
         sync_commit_files(data, heads, gitLocal, commits_only)
     elif data['last_activity_at'] >= get_start(state_key):
         sync_members(data)
@@ -1285,18 +1288,29 @@ def sync_project(pid, gitLocal, commits_only=False):
         sync_variables(data)
 
 
+def get_selected_streams(catalog):
+    '''
+    Gets selected streams from a singer.catalog.Catalog object
+    '''
+    selected_streams = []
+    for stream in catalog.get_selected_streams(STATE):
+        selected_streams.append(stream.tap_stream_id)
+    return selected_streams
+
 def do_sync():
     LOGGER.info("Starting sync")
 
     gids = list(filter(None, CONFIG['groups'].split(' ')))
     pids = list(filter(None, CONFIG['projects'].split(' ')))
 
+    # Get selected stream IDs
+    selected_stream_ids = get_selected_streams(CATALOG)
+
     for stream in CATALOG.get_selected_streams(STATE):
         singer.write_schema(stream.tap_stream_id, stream.schema.to_dict(), stream.key_properties)
 
 
     domain = CONFIG['pull_domain'] if 'pull_domain' in CONFIG else 'gitlab.com'
-    commits_only = CONFIG.get('commits_only', False)
     gitLocal = GitLocal({
         'access_token': CONFIG['private_token'],
         'workingDir': '/tmp',
@@ -1304,19 +1318,19 @@ def do_sync():
     }, 'https://oauth2:{}@' + domain + '/{}.git',
         CONFIG['hmac_token'] if 'hmac_token' in CONFIG else None,
         LOGGER,
-        commitsOnly=commits_only)
+        commitsOnly='commit_files_meta' in selected_stream_ids)
 
     sync_site_users()
 
     LOGGER.info(gids)
 
     for gid in gids:
-        sync_group(gid, pids, gitLocal, commits_only)
+        sync_group(gid, pids, gitLocal, selected_stream_ids)
 
     if not gids:
         # When not syncing groups
         for pid in pids:
-            sync_project(pid, gitLocal, commits_only)
+            sync_project(pid, gitLocal, selected_stream_ids)
 
     # Write the final STATE
     # This fixes syncing using groups, which don't emit a STATE message
