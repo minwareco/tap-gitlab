@@ -1328,7 +1328,7 @@ def do_sync():
     }, 'https://oauth2:{}@' + domain + '/{}.git',
         CONFIG['hmac_token'] if 'hmac_token' in CONFIG else None,
         LOGGER,
-        commitsOnly='commit_files_meta' in selected_stream_ids)
+        commits_only)
 
     sync_site_users()
 
