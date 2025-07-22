@@ -560,9 +560,9 @@ def sync_commit_files(project, heads, gitLocal, commits_only=False, selected_str
 
     refentity = 'refs'
     refstream = CATALOG.get_stream(refentity)
-    if refstream is None or not refstream.is_selected():
-        return
-    refmdata = metadata.to_map(refstream.metadata)
+    refs_selected = refstream is not None and refstream.is_selected()
+    if refs_selected:
+        refmdata = metadata.to_map(refstream.metadata)
 
     # Keep a state for the commits fetched per project
     state_key = "project_{}_{}".format(project["id"], entity)
@@ -604,7 +604,7 @@ def sync_commit_files(project, heads, gitLocal, commits_only=False, selected_str
             continue
 
         # Emit the ref record as well if it's not for a pull request (only if refs stream is selected)
-        if not ('refs/pull' in headRef) and selected_stream_ids and 'refs' in selected_stream_ids:
+        if refs_selected and not ('refs/pull' in headRef) and selected_stream_ids and 'refs' in selected_stream_ids:
             refRecord = {
                 'id': '{}/{}'.format(repo_path, headRef),
                 '_sdc_repository': repo_path,
