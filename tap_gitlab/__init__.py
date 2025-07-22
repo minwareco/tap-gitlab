@@ -565,7 +565,7 @@ def sync_commit_files(project, heads, gitLocal, commits_only=False, selected_str
     refmdata = metadata.to_map(refstream.metadata)
 
     # Keep a state for the commits fetched per project
-    state_key = "project_{}_commits_files".format(project["id"])
+    state_key = "project_{}_{}".format(project["id"], entity)
     fetchedCommits = STATE[state_key] if state_key in STATE else None
     if not fetchedCommits:
         fetchedCommits = {}
@@ -1253,9 +1253,11 @@ def sync_project(pid, gitLocal, commits_only, selected_stream_ids=None):
         utils.update_state(STATE, state_key, last_activity_at)
         singer.write_state(STATE)
 
-    # If commit_files is selected, then skip the other streams
+    # If commit_files or commit_files_meta is selected, then skip the other streams
     commitFilesStream = CATALOG.get_stream('commit_files')
-    if commitFilesStream is None or not commitFilesStream.is_selected():
+    commitFilesMetaStream = CATALOG.get_stream('commit_files_meta')
+    if (commitFilesStream is None or not commitFilesStream.is_selected()) and \
+       (commitFilesMetaStream is None or not commitFilesMetaStream.is_selected()):
         commitFiles = False
     else:
         commitFiles = True
