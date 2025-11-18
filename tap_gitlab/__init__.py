@@ -1168,7 +1168,14 @@ def sync_pipelines(project):
 
             # Write the Pipeline record
             singer.write_record(entity, transformed_row, time_extracted=utils.now())
-            utils.update_state(STATE, state_key, row['updated_at'])
+            # GitLab API may not always return updated_at field for pipelines
+            # Use created_at as fallback since it's always present
+            if 'updated_at' in row:
+                utils.update_state(STATE, state_key, row['updated_at'])
+            elif 'created_at' in row:
+                utils.update_state(STATE, state_key, row['created_at'])
+            else:
+                LOGGER.warning(f"Pipeline has no updated_at or created_at field. Row data: {row}")
 
             # Sync additional details of a pipeline using get-a-single-pipeline endpoint
             # https://docs.gitlab.com/ee/api/pipelines.html#get-a-single-pipeline
