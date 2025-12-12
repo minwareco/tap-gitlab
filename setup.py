@@ -3,7 +3,7 @@
 from setuptools import setup
 import os
 
-UTILS_VERSION = "d81bc721c0fedf144150168205962a7228364f8c"
+UTILS_VERSION = "756eaa55ae05c44a58124a26e839698c2f5b78cc"
 
 setup(name='tap-gitlab',
       version='0.9.15',
