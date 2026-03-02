@@ -24,7 +24,7 @@ import gc
 import asyncio
 from urllib.parse import urlparse
 
-from minware_singer_utils import GitLocal, SecureLogger
+from minware_singer_utils import GitLocal, GitLocalRepoNotFoundException, SecureLogger
 
 PER_PAGE_MAX = 100
 CONFIG = {
@@ -1405,12 +1405,20 @@ def do_sync():
     LOGGER.info(gids)
 
     for gid in gids:
-        sync_group(gid, pids, gitLocal, commits_only, selected_stream_ids)
+        try:
+            sync_group(gid, pids, gitLocal, commits_only, selected_stream_ids)
+        except GitLocalRepoNotFoundException as e:
+            LOGGER.warning(f'Repository for group {gid} not found, skipping: {e}')
+            continue
 
     if not gids:
         # When not syncing groups
         for pid in pids:
-            sync_project(pid, gitLocal, commits_only, selected_stream_ids)
+            try:
+                sync_project(pid, gitLocal, commits_only, selected_stream_ids)
+            except GitLocalRepoNotFoundException as e:
+                LOGGER.warning(f'Repository for project {pid} not found, skipping: {e}')
+                continue
 
     # Write the final STATE
     # This fixes syncing using groups, which don't emit a STATE message
