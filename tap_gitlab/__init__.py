@@ -24,7 +24,7 @@ import gc
 import asyncio
 from urllib.parse import urlparse
 
-from minware_singer_utils import GitLocal, SecureLogger
+from minware_singer_utils import GitLocal, GitLocalRepoNotFoundException, SecureLogger
 
 PER_PAGE_MAX = 100
 CONFIG = {
@@ -1112,7 +1112,11 @@ def sync_group(gid, pids, gitLocal, commits_only, selected_stream_ids=None):
         group_projects_url = get_url(entity="group_projects", id=gid)
         for project in gen_request(group_projects_url):
             if project["id"]:
-                sync_project(project["id"], gitLocal, commits_only, selected_stream_ids)
+                try:
+                    sync_project(project["id"], gitLocal, commits_only, selected_stream_ids)
+                except GitLocalRepoNotFoundException as e:
+                    LOGGER.warning(f'Repository for project {project["id"]} not found, skipping: {e}')
+                    continue
 
         group_subgroups_url = get_url("group_subgroups", id=gid)
         for group in gen_request(group_subgroups_url):
@@ -1122,7 +1126,11 @@ def sync_group(gid, pids, gitLocal, commits_only, selected_stream_ids=None):
         # Sync only specific projects of the group, if explicit projects are provided
         for pid in pids:
             if pid.startswith(data['full_path'] + '/') or pid in [str(p['id']) for p in data['projects']]:
-                sync_project(pid, gitLocal, commits_only, selected_stream_ids)
+                try:
+                    sync_project(pid, gitLocal, commits_only, selected_stream_ids)
+                except GitLocalRepoNotFoundException as e:
+                    LOGGER.warning(f'Repository for project {pid} not found, skipping: {e}')
+                    continue
 
     sync_milestones(data, "group")
 
@@ -1410,7 +1418,11 @@ def do_sync():
     if not gids:
         # When not syncing groups
         for pid in pids:
-            sync_project(pid, gitLocal, commits_only, selected_stream_ids)
+            try:
+                sync_project(pid, gitLocal, commits_only, selected_stream_ids)
+            except GitLocalRepoNotFoundException as e:
+                LOGGER.warning(f'Repository for project {pid} not found, skipping: {e}')
+                continue
 
     # Write the final STATE
     # This fixes syncing using groups, which don't emit a STATE message
