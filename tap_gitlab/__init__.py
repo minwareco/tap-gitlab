@@ -362,14 +362,18 @@ def request(url, params=None) -> GitlabResponse:
         LOGGER.info("Reason: {} - {}".format(resp.status_code, resp.content))
         raise ResourceInaccessible
 
-    # Parse JSON response - will retry if it fails
+    # Parse JSON response
     try:
         resp_json = resp.json()
     except requests.exceptions.JSONDecodeError as e:
-        LOGGER.warning(f"JSON decode error: {str(e)}")
+        LOGGER.warning(f"JSON decode error for {url}: {str(e)}")
         LOGGER.warning(f"Response status code: {resp.status_code}")
-        LOGGER.warning(f"Response text: {resp.text}")
-        raise  # Let backoff retry
+        LOGGER.warning(f"Response text (first 500 chars): {resp.text[:500]}")
+        # If the server returns 200 with non-JSON (e.g. HTML redirect page),
+        # retrying won't help — treat as inaccessible resource
+        if resp.status_code == 200:
+            raise ResourceInaccessible
+        raise  # Other status codes: let backoff retry
 
     return GitlabResponse(response=resp, json_data=resp_json)
 
