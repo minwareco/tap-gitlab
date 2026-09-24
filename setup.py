@@ -14,7 +14,7 @@ setup(name='tap-gitlab',
       py_modules=['tap_gitlab'],
       install_requires=[
           'singer-python==6.0.1',
-          'requests==2.32.5',
+          'requests==2.33.0',
           'strict-rfc3339==0.7',
           'backoff==2.2.1',
           'psutil==5.8.0',
