@@ -441,7 +441,17 @@ def sync_branches(project, headsOnly=False):
     url = get_url(entity="branches", id=project['id'])
     with Transformer(pre_hook=format_timestamp) as transformer:
         for row in gen_request(url):
-            heads['refs/heads/' + row['name']] = row['commit']['id']
+            commit = row.get('commit')
+            if commit and commit.get('id'):
+                heads['refs/heads/' + row['name']] = commit['id']
+            else:
+                # GitLab occasionally returns a branch with no commit data due to a
+                # transient issue on their end. Skip head tracking for this branch
+                # rather than failing the entire project sync.
+                LOGGER.warning(
+                    'Branch {} in project {} has no commit data, skipping head tracking for it'
+                    .format(row.get('name'), project['id'])
+                )
             if headsOnly:
                 continue
             row['project_id'] = project['id']
