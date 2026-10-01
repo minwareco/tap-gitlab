@@ -326,6 +326,12 @@ def get_start(entity):
 latest_response = None
 latest_request = None
 
+def is_gitlab_com_host(host):
+    """True for gitlab.com and its subdomains. Accepts a hostname or a host:port pair."""
+    hostname = (host or '').lower().split(':')[0]
+    return hostname == 'gitlab.com' or hostname.endswith('.gitlab.com')
+
+
 @backoff.on_predicate(backoff.runtime,
                       predicate=lambda r: r.status_code == 429,
                       max_tries=5,
@@ -347,7 +353,7 @@ def request(url, params=None) -> GitlabResponse:
     if 'user_agent' in CONFIG:
         headers['User-Agent'] = CONFIG['user_agent']
 
-    proxies = None if urlparse(url).hostname.endswith('gitlab.com') else {
+    proxies = None if is_gitlab_com_host(urlparse(url).hostname) else {
         'http': os.getenv('MINWARE_PROXY', ''),
         'https': os.getenv('MINWARE_PROXY', '')
     }
@@ -1412,7 +1418,7 @@ def do_sync():
     gitLocal = GitLocal({
         'access_token': CONFIG['private_token'],
         'workingDir': '/tmp',
-        'proxy': os.environ.get("MINWARE_PROXY") if not domain.endswith('gitlab.com') else None
+        'proxy': os.environ.get("MINWARE_PROXY") if not is_gitlab_com_host(domain) else None
     }, 'https://oauth2:{}@' + domain + '/{}.git',
         CONFIG['hmac_token'] if 'hmac_token' in CONFIG else None,
         LOGGER,
